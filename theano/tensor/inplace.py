@@ -276,6 +276,16 @@ def psi_inplace(a):
 
 
 @_scal_inplace
+def digamma_inplace(a):
+    """first derivative of log gamma function"""
+
+
+@_scal_inplace
+def trigamma_inplace(a):
+    """first derivative of log gamma function"""
+
+
+@_scal_inplace
 def chi2sf_inplace(x, k):
     """chi squared survival function"""
 

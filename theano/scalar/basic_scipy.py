@@ -349,6 +349,93 @@ class Psi(UnaryScalarOp):
 psi = Psi(upgrade_to_float, name='psi')
 
 
+class Trigamma(UnaryScalarOp):
+
+    @staticmethod
+    def st_impl(x):
+        return scipy.special.polygamma(1, x)
+
+    def impl(self, x):
+        if imported_scipy_special:
+            return Trigamma.st_impl(x)
+        else:
+            super(Trigamma, self).impl(x)
+
+    def grad(self, inputs, outputs_gradients):
+        raise NotImplementedError()
+
+    def c_support_code(self):
+        return (
+            """
+            // For GPU support
+            #ifdef __CUDACC__
+            #define DEVICE __device__
+            #else
+            #define DEVICE
+            #endif
+
+            #ifndef _TRIGAMMAFUNCDEFINED
+            #define _TRIGAMMAFUNCDEFINED
+            DEVICE double _trigamma(double x){
+
+            double C0 = 0.16666666666666666;
+            double C1 = -0.03333333333333333;
+            double C2 = 0.023809523809523808;
+            double C3 = -0.03333333333333333;
+            double C4 = 0.07575757575757576;
+            double C5 = -0.2531135531135531;
+            double C6 = 1.1666666666666667;
+            double C7 = -7.092156862745098;
+
+            double psi_ = 0.0;
+
+            if (x < 8.0) {
+                double i = 0.0;
+                double n = 8.0 - floor(x); // - (int) x
+                while (i < n) {
+                    psi_ = psi_ + 1.0 / ((x+i)*(x+i));
+                    i = i + 1.0;
+                }
+                x = x + n;
+            }
+
+            double t = 1.0 / x;
+            double w = t * t;
+            double p = C0+w*(C1+w*(C2+w*(C3+w*(C4+w*(C5+w*(C6+w*C7))))));
+
+            psi_ = psi_ + t + 0.5 * w;
+            psi_ = psi_ + t * w * p;
+
+            return psi_;}
+            #endif
+            """)
+
+    def c_code(self, node, name, inp, out, sub):
+        x, = inp
+        z, = out
+        if node.inputs[0].type in float_types:
+            return """%(z)s =
+                _trigamma(%(x)s);""" % locals()
+        raise NotImplementedError('only floating point is implemented')
+trigamma = Trigamma(upgrade_to_float, name='trigamma')
+
+
+class Digamma(Psi):
+
+    def grad(self, inp, grads):
+        x, = inp
+        gz, = grads
+        if x.type in complex_types:
+            raise NotImplementedError()
+        if self(x).type in discrete_types:
+            if x.type in discrete_types:
+                return [x.zeros_like(dtype=theano.config.floatX)]
+            else:
+                return [x.zeros_like()]
+        return [gz * trigamma(x)]
+digamma = Digamma(upgrade_to_float, name='digamma')
+
+
 class Chi2SF(BinaryScalarOp):
     """
     Compute (1 - chi2_cdf(x)) ie. chi2 pvalue (chi2 'survival function').

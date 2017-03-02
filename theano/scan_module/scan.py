@@ -81,7 +81,8 @@ def scan(fn,
          name=None,
          profile=False,
          allow_gc=None,
-         strict=False):
+         strict=False,
+         return_list=False):
     """
     This function constructs and applies a Scan op to the provided
     arguments.
@@ -333,6 +334,9 @@ def scan(fn,
         If true, all the shared variables used in ``fn`` must be provided as a
         part of ``non_sequences`` or ``sequences``.
 
+    return_list
+        If True, will always return a list, even if there is only 1 output.
+
     Returns
     -------
     tuple
@@ -396,7 +400,7 @@ def scan(fn,
 
     # Check n_steps is an int
     if (hasattr(n_steps, 'dtype') and
-        str(n_steps.dtype)[:3] not in ('uin', 'int')):
+        str(n_steps.dtype) not in tensor.integer_dtypes):
         raise ValueError(' n_steps must be an int. dtype provided '
                          'is %s' % n_steps.dtype)
 
@@ -794,7 +798,8 @@ def scan(fn,
                 return_steps.get(pos, 0) != 1):
                 outputs[pos] = tensor.unbroadcast(
                     tensor.shape_padleft(inner_out), 0)
-        if len(outputs) == 1:
+
+        if return_list is not True and len(outputs) == 1:
             outputs = outputs[0]
 
         return (outputs, updates)
@@ -1134,8 +1139,9 @@ def scan(fn,
             # refers to update rule of index -1 - `pos`.
             update_map[sit_sot_shared[abs(pos) - 1]] = _scan_out_list[idx][-1]
     scan_out_list = [x for x in scan_out_list if x is not None]
-    if len(scan_out_list) == 1:
+    if return_list is not True and len(scan_out_list) == 1:
         scan_out_list = scan_out_list[0]
     elif len(scan_out_list) == 0:
         scan_out_list = None
+
     return (scan_out_list, update_map)

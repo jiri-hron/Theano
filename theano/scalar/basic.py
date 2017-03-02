@@ -88,6 +88,14 @@ def upcast(dtype, *dtypes):
     return rval
 
 
+def as_common_dtype(*vars):
+    """
+    For for theano.scalar.Scalar and TensorVariable.
+    """
+    dtype = upcast(*[v.dtype for v in vars])
+    return (v.astype(dtype) for v in vars)
+
+
 def get_scalar_type(dtype):
     """
     Return a Scalar(dtype) object.
@@ -277,10 +285,10 @@ def convert(x, dtype=None):
     return x_
 
 
-def constant(x):
-    x = convert(x)
+def constant(x, name=None, dtype=None):
+    x = convert(x, dtype=dtype)
     assert x.ndim == 0
-    return ScalarConstant(get_scalar_type(str(x.dtype)), x)
+    return ScalarConstant(get_scalar_type(str(x.dtype)), x, name=name)
 
 
 class Scalar(Type):
@@ -782,6 +790,12 @@ class _scalar_py_operators:
             dtype = str(self.type.dtype)
         return second(self, ScalarConstant(get_scalar_type(dtype), 0))
 
+    def ones_like(self, dtype=None):
+        # The second is needed for Elemwise ops to work right
+        if dtype is None:
+            dtype = str(self.type.dtype)
+        return second(self, ScalarConstant(get_scalar_type(dtype), 1))
+
     def astype(self, dtype):
         return cast(self, dtype)
 
@@ -852,6 +866,14 @@ def upgrade_to_float(*types):
             uint64: float64}
     return get_scalar_type(Scalar.upcast(*[conv.get(type, type)
                                            for type in types])),
+
+
+def upgrade_to_float64(*types):
+    """
+    Upgrade any int and float32 to float64 to do as SciPy.
+
+    """
+    return get_scalar_type('float64'),
 
 
 def same_out(type):
@@ -1527,7 +1549,7 @@ xor = XOR()
 
 
 class AND(BinaryBitOp):
-    identity = 1
+    identity = -1
     commutative = True
     associative = True
     nfunc_spec = ('bitwise_and', 2, 1)
@@ -1539,6 +1561,10 @@ class AND(BinaryBitOp):
         (x, y) = inputs
         (z,) = outputs
         return "%(z)s = (%(x)s & %(y)s);" % locals()
+
+    def c_code_cache_version(self):
+        super_version = super(AND, self).c_code_cache_version()
+        return super_version + (3,)
 and_ = AND()
 
 
@@ -2498,58 +2524,42 @@ class RoundHalfToEven(UnaryScalarOp):
 
         return [rval]
 
-    def c_code___(self, node, name, inputs, outputs, sub):
+    def c_code_cache_version(self):
+        return (1,)
+
+    def c_code(self, node, name, inputs, outputs, sub):
         (x,) = inputs
         (z,) = outputs
         typ = node.outputs[0].type.dtype
         if typ not in ['float32', 'float64']:
             raise NotImplementedError("The output should be float32 or float64")
-
-        return dedent("""
-            #ifndef ROUNDING_EPSILON
-            #define ROUNDING_EPSILON 0.0000001
-            #endif
-
-            if (%(x)s < 0.0){
-              // We implement the else part like that: -else( -%(x)s);
-              %(typ)s i;
-              std::modf( -%(x)s, &i );
-
-              // If %(x)s is exactly halfway between two integers
-              if ((-%(x)s -(i +0.5)) < epsilon){
-                  // If 'i' is even then return 'i'
-                if (std::fmod( i, 2.0 ) < epsilon){
-                  %(z)s = - i;
-                }else{
-                  // Else return the nearest even integer
-                  %(z)s = - ceil( i +0.5 );
-                }
-              }else{
-                // round to closest
-                %(z)s = - round(%(x)s+5);
-              }
-            }else{
-              %(typ)s i;
-              std::modf( %(x)s, &i );
-
-              // If %(x)s is exactly halfway between two integers
-              if ((%(x)s -(i +0.5)) < epsilon){
-                  // If 'i' is even then return 'i'
-                if (std::fmod( i, 2.0 ) < epsilon){
-                  %(z)s = i;
-                }else{
-                  // Else return the nearest even integer
-                  %(z)s =  ceil( i +0.5 );
-                }
-              }else{
-                // round to closest
-                %(z)s = round(%(x)s+5);
-              }
+        if typ == 'float32':
+            ctype = 'float'
+            floor_function = 'floorf'
+        else:
+            ctype = 'double'
+            floor_function = 'floor'
+        return """
+        /* Code inspired from NumPy npy_rint implementation. */
+        {
+            %(ctype)s y, r;
+            y = %(floor_function)s(%(x)s);
+            r = %(x)s - y;
+            if(r > 0.5) {
+                y += 1;
+            } else if(r == 0.5) {
+                r = y - 2.0*%(floor_function)s(0.5*y);
+                /*
+                If y is even, then r == 0
+                If y is odd,  then r == 1
+                So we can just add r to y, so that
+                y will be incremented only if he's odd.
+                */
+                y += (int)r;
             }
-
-            #undef ROUNDING_EPSILON
-
-            """ % locals())
+            %(z)s = y;
+        }
+        """ % locals()
 round_half_to_even = RoundHalfToEven(same_out_float_only)
 
 

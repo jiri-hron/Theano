@@ -62,7 +62,7 @@ import copy
 
 
 def get_version():
-    return 0.295
+    return 0.296
 
 @cython.boundscheck(False)
 def perform(
@@ -217,7 +217,7 @@ def perform(
     else:
         for idx in range(n_seqs):
             if args[<unsigned int>(1+idx)].shape[0] < n_steps:
-                raise ValueError(('Sequence is shorter then the required '
+                raise ValueError(('Sequence is shorter than the required '
                                  'number of steps : (n_steps, seq, '
                                   'seq.shape):'), n_steps,
                                   args[1+idx],
@@ -514,8 +514,6 @@ def perform(
             if i == 0:
                 jout = j+offset_out
                 shape = (store_steps[j],) + output_storage[jout].storage[0].shape
-                if len(output_storage[jout].storage[0].shape) == 0:
-                    vector_outs[j] = 1
                 dtype = output_storage[jout].storage[0].dtype
                 if (outs[j][0] is None or
                         outs[j][0].shape[0] < store_steps[j] or
@@ -650,4 +648,3 @@ def perform(
     self.t_call = t_call
     self.t_fn   = t_fn
     # print 'Cython > timing', t_call, t_fn, 'in percentage', 100.*t_fn/t_call
-

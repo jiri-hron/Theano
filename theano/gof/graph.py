@@ -481,12 +481,12 @@ class Variable(Node):
         Examples
         --------
 
-        >>> import numpy
+        >>> import numpy as np
         >>> import theano.tensor as T
         >>> x = T.dscalar('x')
         >>> y = T.dscalar('y')
         >>> z = x + y
-        >>> numpy.allclose(z.eval({x : 16.3, y : 12.1}), 28.4)
+        >>> np.allclose(z.eval({x : 16.3, y : 12.1}), 28.4)
         True
 
         We passed :func:`eval` a dictionary mapping symbolic theano
@@ -547,6 +547,7 @@ class Constant(Variable):
     def __init__(self, type, data, name=None):
         Variable.__init__(self, type, None, None, name)
         self.data = type.filter(data)
+        utils.add_tag_trace(self)
 
     def equals(self, other):
         # this does what __eq__ should do, but Variable and Apply should always be hashable by id
@@ -1098,7 +1099,10 @@ def io_connection_pattern(inputs, outputs):
     # connnection patterns of the individual outputs
     global_connection_pattern = [[] for o in range(len(inputs))]
     for out in outputs:
-        out_connection_pattern = connect_pattern_by_var[out]
+        out_connection_pattern = connect_pattern_by_var.get(out)
+        if out_connection_pattern is None:
+            # the output is completely isolated from inputs
+            out_connection_pattern = [False] * len(inputs)
         for i in range(len(inputs)):
             global_connection_pattern[i].append(out_connection_pattern[i])
 

@@ -88,16 +88,7 @@ class _tensor_py_operators(object):
             return True
         else:
             raise TypeError(
-                "Variables do not support boolean operations. This "
-                "can happen if you do a logical operation (<, <=, >, <=, "
-                "==, !=) between a numpy.ndarray and a Theano tensor"
-                "variable. Due to NumPy implementation before NumPy 1.8, "
-                "we cannot make the Python syntax work when the ndarray "
-                "is on the left, and this results in this error. To work "
-                "around that, either call "
-                "theano.tensor.{lt,le,eq,ne,gt,ge}(ndarray, tensor), or "
-                "use the Python syntax with the Theano tensor on the "
-                "left. Or update to NumPy 1.8 or above."
+                "Variables do not support boolean operations."
             )
 
     # BITWISE
@@ -510,6 +501,10 @@ class _tensor_py_operators(object):
             args[ellipsis_at: ellipsis_at + 1] = (
                 [slice(None)] * (self.ndim - (len(args) - 1 - new_axes)))
 
+        # Force input to be int64 datatype if input is an empty list or tuple
+        # Else leave it as is if it is a real number
+        args = tuple([numpy.array(inp, dtype=numpy.int64)
+                      if(inp == [] or inp == ()) else inp for inp in args])
         # Convert python literals to theano constants
         args = theano.tensor.subtensor.make_constant(args)
         # Determine if advanced indexing is needed or not
@@ -720,7 +715,7 @@ class _tensor_py_operators(object):
         """See `theano.tensor.repeat`."""
         return theano.tensor.extra_ops.repeat(self, repeats, axis)
 
-    def round(self, mode="half_away_from_zero"):
+    def round(self, mode=None):
         """See `theano.tensor.round`."""
         return theano.tensor.basic.round(self, mode)
 
@@ -735,6 +730,9 @@ class _tensor_py_operators(object):
 
     def zeros_like(model, dtype=None):
         return theano.tensor.basic.zeros_like(model, dtype=dtype)
+
+    def ones_like(model, dtype=None):
+        return theano.tensor.basic.ones_like(model, dtype=dtype)
 
     def cumsum(self, axis=None):
         return theano.tensor.extra_ops.cumsum(self, axis)

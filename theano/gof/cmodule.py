@@ -20,7 +20,7 @@ import platform
 import distutils.sysconfig
 import warnings
 
-import numpy.distutils  # TODO: TensorType should handle this
+import numpy.distutils
 
 import theano
 from theano.compat import PY3, decode, decode_iter
@@ -669,7 +669,7 @@ class ModuleCache(object):
         if do_refresh:
             self.refresh()
 
-    age_thresh_use = 60 * 60 * 24 * 24    # 24 days
+    age_thresh_use = config.cmodule.age_thresh_use  # default 24 days
     """
     The default age threshold (in seconds) for cache files we want to use.
 
@@ -1241,7 +1241,8 @@ class ModuleCache(object):
 
         self.time_spent_in_check_key += time.time() - start_time
 
-    age_thresh_del = 60 * 60 * 24 * 31  # 31 days
+    # default 31 days
+    age_thresh_del = config.cmodule.age_thresh_use + 60 * 60 * 24 * 7
     age_thresh_del_unversioned = 60 * 60 * 24 * 7  # 7 days
     """
     The default age threshold for `clear_old` (in seconds).
@@ -1884,11 +1885,6 @@ class GCC_compiler(Compiler):
             for f in cxxflags:
                 # If the user give an -march=X parameter, don't add one ourself
                 if ((f.startswith("--march=") or f.startswith("-march="))):
-                    _logger.warn(
-                        "WARNING: your Theano flags `gcc.cxxflags` specify"
-                        " an `-march=X` flags.\n"
-                        "         It is better to let Theano/g++ find it"
-                        " automatically, but we don't do it now")
                     detect_march = False
                     GCC_compiler.march_flags = []
                     break
@@ -1934,12 +1930,10 @@ class GCC_compiler(Compiler):
                                 "CXXFLAGS=" in line or
                                 "-march=native" in line):
                             continue
-                        elif "-march=" in line:
-                            selected_lines.append(line.strip())
-                        elif "-mtune=" in line:
-                            selected_lines.append(line.strip())
-                        elif "-target-cpu" in line:
-                            selected_lines.append(line.strip())
+                        for reg in ["-march=", "-mtune=",
+                                    "-target-cpu", "-mabi="]:
+                            if reg in line:
+                                selected_lines.append(line.strip())
                     lines = list(set(selected_lines))  # to remove duplicate
 
                 return lines
@@ -2130,23 +2124,10 @@ class GCC_compiler(Compiler):
         if march_flags and GCC_compiler.march_flags:
             cxxflags.extend(GCC_compiler.march_flags)
 
-        # NumPy 1.7 Deprecate the old API. I updated most of the places
-        # to use the new API, but not everywhere. When finished, enable
-        # the following macro to assert that we don't bring new code
+        # NumPy 1.7 Deprecate the old API.
+        # The following macro asserts that we don't bring new code
         # that use the old API.
         cxxflags.append("-DNPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION")
-        numpy_ver = [int(n) for n in numpy.__version__.split('.')[:2]]
-
-        # numpy 1.7 deprecated the following macro but the new one didn't
-        # existed in the past
-        if bool(numpy_ver < [1, 7]):
-            cxxflags.append("-DNPY_ARRAY_ENSUREARRAY=NPY_ENSUREARRAY")
-            cxxflags.append("-DNPY_ARRAY_ENSURECOPY=NPY_ENSURECOPY")
-            cxxflags.append("-DNPY_ARRAY_ALIGNED=NPY_ALIGNED")
-            cxxflags.append("-DNPY_ARRAY_WRITEABLE=NPY_WRITEABLE")
-            cxxflags.append("-DNPY_ARRAY_UPDATE_ALL=NPY_UPDATE_ALL")
-            cxxflags.append("-DNPY_ARRAY_C_CONTIGUOUS=NPY_C_CONTIGUOUS")
-            cxxflags.append("-DNPY_ARRAY_F_CONTIGUOUS=NPY_F_CONTIGUOUS")
 
         # Platform-specific flags.
         # We put them here, rather than in compile_str(), so they en up

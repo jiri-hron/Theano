@@ -126,6 +126,12 @@ AddConfigVar(
     BoolParam(False, allow_override=False),
     in_c_key=False)
 
+AddConfigVar(
+    'print_global_stats',
+    "Print some global statistics (time spent) at the end",
+    BoolParam(False),
+    in_c_key=False)
+
 
 class ContextsParam(ConfigParam):
     def __init__(self):
@@ -191,6 +197,12 @@ AddConfigVar(
        or else "AUTO".
        """,
     StrParam(default_cuda_root),
+    in_c_key=False)
+
+AddConfigVar(
+    'cuda.enabled',
+    'If false, C code in old backend is not compiled.',
+    BoolParam(True),
     in_c_key=False)
 
 
@@ -488,10 +500,8 @@ else:
                  "Default linker used if the theano flags mode is Mode",
                  EnumStr('vm', 'py', 'vm_nogc'),
                  in_c_key=False)
-    try:
+    if type(config).cxx.is_default:
         # If the user provided an empty value for cxx, do not warn.
-        theano.configparser.fetch_val_for_key('cxx')
-    except KeyError:
         _logger.warning(
             'g++ not detected ! Theano will be unable to execute '
             'optimized C-implementations (for both CPU and GPU) and will '
@@ -694,7 +704,7 @@ AddConfigVar('warn.ignore_bug_before',
               "Warning for specific bugs can be configured with specific "
               "[warn] flags."),
              EnumStr('0.7', 'None', 'all', '0.3', '0.4', '0.4.1', '0.5', '0.6',
-                     '0.7', '0.8', '0.8.1', '0.8.2',
+                     '0.7', '0.8', '0.8.1', '0.8.2', '0.9',
                      allow_override=False),
              in_c_key=False)
 
@@ -797,6 +807,13 @@ AddConfigVar('warn.inc_set_subtensor1',
               'one vector or matrix of ints).'),
              BoolParam(warn_default('0.7')),
              in_c_key=False)
+
+AddConfigVar('warn.round',
+             "Round changed its default from Seed to use for randomized unit tests. "
+             "Special value 'random' means using a seed of None.",
+             BoolParam(warn_default('0.9')),
+             in_c_key=False)
+
 
 AddConfigVar(
     'compute_test_value',
@@ -1106,7 +1123,7 @@ AddConfigVar('optdb.position_cutoff',
 
 AddConfigVar('optdb.max_use_ratio',
              'A ratio that prevent infinite loop in EquilibriumOptimizer.',
-             FloatParam(5),
+             FloatParam(8),
              in_c_key=False)
 
 AddConfigVar('gcc.cxxflags',
@@ -1143,9 +1160,17 @@ AddConfigVar('cmodule.preload_cache',
              BoolParam(False, allow_override=False),
              in_c_key=False)
 
+AddConfigVar('cmodule.age_thresh_use',
+             "In seconds. The time after which "
+             "Theano won't reuse a compile c module.",
+             # 24 days
+             IntParam(60 * 60 * 24 * 24, allow_override=False),
+             in_c_key=False)
+
 
 def default_blas_ldflags():
     global numpy
+    warn_record = []
     try:
         if (hasattr(numpy.distutils, '__config__') and
                 numpy.distutils.__config__):
@@ -1260,7 +1285,7 @@ def default_blas_ldflags():
             import mkl  # noqa
         except ImportError as e:
             if any([m for m in ('conda', 'Continuum') if m in sys.version]):
-                _logger.warning('install mkl with `conda install mkl-service`: %s', e)
+                warn_record.append(('install mkl with `conda install mkl-service`: %s', e))
         else:
             # This branch is executed if no exception was raised
             if sys.platform == "win32":
@@ -1302,6 +1327,13 @@ def default_blas_ldflags():
         res = try_blas_flag(ret)
         if res:
             return res
+
+        # If we are using conda and can't reuse numpy blas, then doing
+        # the fallback and test -lblas could give slow computation, so
+        # warn about this.
+        for warn in warn_record:
+            _logger.warning(*warn)
+        del warn_record
 
         # Some environment don't have the lib dir in LD_LIBRARY_PATH.
         # So add it.

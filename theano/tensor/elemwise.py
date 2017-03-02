@@ -21,6 +21,9 @@ from theano.misc.frozendict import frozendict
 config = theano.config
 
 
+_numpy_ver = [int(n) for n in numpy.__version__.split('.')[:2]]
+
+
 # tensor depends on elemwise to provide definitions for several ops
 # but elemwise needs to make TensorType instances, so we have these as
 # placeholders and the tensor module fills them
@@ -340,11 +343,7 @@ class DimShuffle(Op):
             'PyArray_UpdateFlags(%(res)s, NPY_ARRAY_UPDATE_ALL)',
             # we are making a view in both inplace and non-inplace cases
             """
-#if NPY_API_VERSION < 0x00000007
-PyArray_BASE(%(res)s) = (PyObject*)%(basename)s;
-#else
 PyArray_SetBaseObject(%(res)s, (PyObject*)%(basename)s);
-#endif
 """
             '}']
 
@@ -386,7 +385,7 @@ PyArray_SetBaseObject(%(res)s, (PyObject*)%(basename)s);
         # Do not make the DimShuffle inplace as an optimization at the
         # canonicalization optimization phase will remove the inplace.
         # The inplace will be reintroduced automatically later in the graph.
-        if 'int' in inp[0].dtype:
+        if inp[0].dtype in theano.tensor.discrete_dtypes:
             return [inp[0].zeros_like(dtype=theano.config.floatX)]
         else:
             return [DimShuffle(gz.type.broadcastable, grad_order)(
@@ -634,11 +633,7 @@ second dimension
 
         return [[True for output in node.outputs] for ipt in node.inputs]
 
-    def grad(self, inputs, ograds):
-
-        outs = self(*inputs)
-        if not isinstance(outs, (list, tuple)):
-            outs = [outs]
+    def L_op(self, inputs, outs, ograds):
 
         # compute grad with respect to broadcasted input
         rval = self._bgrad(inputs, ograds)
@@ -665,7 +660,7 @@ second dimension
                     elem = ipt.zeros_like()
                     if str(elem.type.dtype) not in theano.tensor.continuous_dtypes:
                         elem = elem.astype(theano.config.floatX)
-                    assert str(elem.type.dtype).find('int') == -1
+                    assert str(elem.type.dtype) not in theano.tensor.discrete_dtypes
                     new_rval.append(elem)
             return new_rval
 
@@ -1045,8 +1040,8 @@ second dimension
             Py_XINCREF(%(oname)s);
             """ % locals()
             # We alias the scalar variables
-            defines += "#define %(oname)s_i %(iname)s_i" % locals()
-            undefs += "#undef %(oname)s_i" % locals()
+            defines += "#define %(oname)s_i %(iname)s_i\n" % locals()
+            undefs += "#undef %(oname)s_i\n" % locals()
 
         # Note: here, olv_index is either the index of the last output
         # which is allocated, OR, if there are any aliased outputs,
@@ -1323,7 +1318,12 @@ class CAReduce(Op):
             self.ufunc = numpy.maximum
         elif isinstance(scalar_op, theano.scalar.basic.Minimum):
             self.ufunc = numpy.minimum
-        elif isinstance(scalar_op, theano.scalar.basic.AND):
+        elif (isinstance(scalar_op, theano.scalar.basic.AND) and
+                _numpy_ver >= [1, 12]):
+            # numpy.bitwise_and.identity was incorrect for versions before
+            # 1.12 (it was 1 instead of -1), so we skip it in that case.
+            # We will fall back to the "else:" case, which defines a
+            # ufunc without identity.
             self.ufunc = numpy.bitwise_and
         elif isinstance(scalar_op, theano.scalar.basic.OR):
             self.ufunc = numpy.bitwise_or
@@ -1419,18 +1419,8 @@ class CAReduce(Op):
                             "self.scalar_op (%s) has no attribute 'identity'"
                             % (variable, dimension, self.scalar_op)))
                 else:
-                    # Numpy 1.6 has a bug where you sometimes have to specify
-                    # "dtype='object'" in reduce for it to work, if the ufunc
-                    # was built with "frompyfunc". We need to find out if we
-                    # are in one of these cases (only "object" is supported in
-                    # the output).
-                    if ((self.ufunc.ntypes == 1) and
-                            (self.ufunc.types[0][-1] == 'O')):
-                        variable = self.ufunc.reduce(variable, dimension,
-                                                     dtype='object')
-                    else:
-                        variable = self.ufunc.reduce(variable, dimension,
-                                                     dtype=acc_dtype)
+                    variable = self.ufunc.reduce(variable, dimension,
+                                                 dtype=acc_dtype)
 
             variable = numpy.asarray(variable)
             if numpy.may_share_memory(variable, input):
@@ -1545,7 +1535,7 @@ class CAReduce(Op):
                 if input.type.dtype in ["float32", "float64"]:
                     identity = "-__builtin_inf()"
                 elif input.type.dtype.startswith("uint"):
-                    # numpy1.5.1 don't define NPY_MIN_UINT*
+                    # numpy does not define NPY_MIN_UINT*
                     identity = "0"
                 else:
                     identity = "NPY_MIN_" + str(input.type.dtype).upper()
@@ -1633,7 +1623,8 @@ for(int i=0;i<PyArray_NDIM(%(iname)s);i++){
         return ['<vector>', '<algorithm>']
 
     def c_code_cache_version_apply(self, node):
-        version = (6,)  # the version corresponding to the c code in this Op
+        # the version corresponding to the c code in this Op
+        version = [6]
 
         # now we insert versions for the ops on which we depend...
         scalar_node = Apply(
@@ -1937,12 +1928,10 @@ class Sum(CAReduceDtype):
             str(self.acc_dtype)
         )
 
-    def grad(self, inp, grads):
+    def L_op(self, inp, out, grads):
         x, = inp
 
-        out = self(*inp)
-
-        if out.dtype not in theano.tensor.continuous_dtypes:
+        if out[0].dtype not in theano.tensor.continuous_dtypes:
             return [x.zeros_like(dtype=theano.config.floatX)]
 
         gz, = grads
@@ -1995,7 +1984,7 @@ class Prod(CAReduceDtype):
         if 'no_zeros_in_input' not in dct:
             self.no_zeros_in_input = False
 
-    def grad(self, inp, grads):
+    def L_op(self, inp, out, grads):
         """
         The grad of this Op could be very easy, if it is was not for the case
         where zeros are present in a given "group" (ie. elements reduced
@@ -2044,9 +2033,7 @@ class Prod(CAReduceDtype):
         prod_in, = inp
         gz, = grads
 
-        out = self(*inp)
-
-        if (out.dtype in theano.tensor.discrete_dtypes or
+        if (out[0].dtype in theano.tensor.discrete_dtypes or
                 self.acc_dtype in theano.tensor.discrete_dtypes):
             # There is an int conversion in the way
             return [prod_in.zeros_like(dtype=theano.config.floatX)]

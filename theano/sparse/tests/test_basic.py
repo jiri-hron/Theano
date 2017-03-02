@@ -86,7 +86,7 @@ def random_lil(shape, dtype, nnz):
         idx = np.random.randint(1, huge+1, size=2) % shape
         value = np.random.rand()
         # if dtype *int*, value will always be zeros!
-        if "int" in dtype:
+        if dtype in theano.sparse.integer_dtypes:
             value = int(value * 100)
         # The call to tuple is needed as scipy 0.13.1 do not support
         # ndarray with lenght 2 as idx tuple.
@@ -3166,6 +3166,20 @@ class SamplingDotTester(utt.InferShapeTester):
 
         tested = f(*self.a)
         x, y, p = self.a
+        expected = p.multiply(np.dot(x, y.T))
+
+        utt.assert_allclose(as_ndarray(expected), tested.toarray())
+        assert tested.format == 'csr'
+        assert tested.dtype == expected.dtype
+
+    def test_negative_stride(self):
+        f = theano.function(
+            self.x,
+            sampling_dot(*self.x))
+
+        a2 = [self.a[0][::-1,:], self.a[1][:,::-1], self.a[2]]
+        tested = f(*a2)
+        x, y, p = a2
         expected = p.multiply(np.dot(x, y.T))
 
         utt.assert_allclose(as_ndarray(expected), tested.toarray())

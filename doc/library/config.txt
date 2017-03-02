@@ -585,7 +585,7 @@ import theano and print the config variable, as in:
 .. attribute:: config.warn.ignore_bug_before
 
     String value: ``'None'``, ``'all'``, ``'0.3'``, ``'0.4'``, ``'0.4.1'``, ``'0.5'``,
-    ``'0.6'``, ``'0.7'``, ``'0.8'``, ``'0.8.1'``, ``'0.8.2'``
+    ``'0.6'``, ``'0.7'``, ``'0.8'``, ``'0.8.1'``, ``'0.8.2'``, ``'0.9'``
 
     Default: ``'0.7'``
 
@@ -670,6 +670,14 @@ import theano and print the config variable, as in:
     Default: $CUDA_ROOT or failing that, ``"/usr/local/cuda"``
 
     A directory with bin/, lib/, include/ folders containing cuda utilities.
+
+.. attribute:: config.cuda.enabled
+
+    Bool value: either ``True`` of ``False``
+
+    Default: ``True``
+
+    If set to `False`, C code in old backend is not compiled.
 
 .. attribute:: config.dnn.enabled
 
@@ -1070,6 +1078,14 @@ import theano and print the config variable, as in:
     Bool value, default: ``False``
 
     If set to True, will preload the C module cache at import time
+
+.. attribute:: config.cmodule.age_thresh_use
+
+    Int value, default: ``60 * 60 * 24 * 24``  # 24 days
+
+    In seconds. The time after which a compiled c module won't be
+    reused by Theano. Automatic deletion of those c module 7 days
+    after that time.
 
 .. attribute:: config.traceback.limit
 

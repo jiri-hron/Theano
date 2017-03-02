@@ -9,7 +9,7 @@ from __future__ import absolute_import, print_function, division
 
 import inspect
 import logging
-import numpy
+import numpy as np
 import os
 import re
 import sys
@@ -1216,8 +1216,8 @@ def apply_meth(tag):
             code = self.code_sections[tag]
 
             define_macros, undef_macros = self.get_c_macros(node, name)
-            return os.linesep.join(['', define_macros, code,
-                                    undef_macros])
+            return '\n'.join(['', define_macros, code,
+                              undef_macros])
         else:
             raise utils.MethodNotDefined(
                 'c_' + tag, type(self), type(self).__name__)
@@ -1296,7 +1296,8 @@ class COp(Op):
         func_files = [self.get_path(f) for f in func_files]
         self.func_codes = []
         for func_file in func_files:
-            with open(func_file, 'r') as f:
+            # U (universal) will convert all new lines format to \n.
+            with open(func_file, 'U') as f:
                 self.func_codes.append(f.read())
 
         # If both the old section markers and the new section markers are
@@ -1430,7 +1431,7 @@ class COp(Op):
                     (macro_name, macro_value))
                 undef_macros.append(undef_template % macro_name)
 
-                d = numpy.dtype(v.dtype)
+                d = np.dtype(v.dtype)
 
                 macro_name = "TYPENUM_" + vname
                 macro_value = d.num
@@ -1457,7 +1458,7 @@ class COp(Op):
             define_macros.append(define_template % (n, v))
             undef_macros.append(undef_template % (n,))
 
-        return os.linesep.join(define_macros), os.linesep.join(undef_macros)
+        return '\n'.join(define_macros), '\n'.join(undef_macros)
 
     def _lquote_macro(self, txt):
         res = []
@@ -1465,7 +1466,7 @@ class COp(Op):
         for l in spl[:-1]:
             res.append(l + ' \\')
         res.append(spl[-1])
-        return os.linesep.join(res)
+        return '\n'.join(res)
 
     def get_sub_macros(self, sub):
         define_macros = []
@@ -1477,7 +1478,7 @@ class COp(Op):
             define_macros.append("#define PARAMS %s" % (sub['params'],))
             undef_macros.append("#undef PARAMS")
 
-        return os.linesep.join(define_macros), os.linesep.join(undef_macros)
+        return '\n'.join(define_macros), '\n'.join(undef_macros)
 
     def get_io_macros(self, inputs, outputs):
         define_macros = []
@@ -1502,9 +1503,9 @@ class COp(Op):
             def_macros, undef_macros = self.get_c_macros(node, name)
             def_sub, undef_sub = self.get_sub_macros(sub)
 
-            return os.linesep.join(['', def_macros, def_sub,
-                                    op_code,
-                                    undef_sub, undef_macros])
+            return '\n'.join(['', def_macros, def_sub,
+                              op_code,
+                              undef_sub, undef_macros])
         else:
             raise utils.MethodNotDefined(
                 'c_init_code_struct', type(self), type(self).__name__)
@@ -1542,9 +1543,9 @@ class COp(Op):
                 def_sub, undef_sub = self.get_sub_macros(sub)
                 def_io, undef_io = self.get_io_macros(inp, out)
 
-                return os.linesep.join([def_macros, def_sub, def_io,
-                                        op_code,
-                                        undef_io, undef_sub, undef_macros])
+                return '\n'.join([def_macros, def_sub, def_io,
+                                  op_code,
+                                  undef_io, undef_sub, undef_macros])
             else:
                 raise utils.MethodNotDefined(
                     'c_code', type(self), type(self).__name__)
@@ -1560,9 +1561,9 @@ class COp(Op):
             def_sub, undef_sub = self.get_sub_macros(sub)
             def_io, undef_io = self.get_io_macros(inputs, outputs)
 
-            return os.linesep.join([def_macros, def_sub, def_io,
-                                    op_code,
-                                    undef_io, undef_sub, undef_macros])
+            return '\n'.join([def_macros, def_sub, def_io,
+                              op_code,
+                              undef_io, undef_sub, undef_macros])
         else:
             raise utils.MethodNotDefined(
                 'c_code_cleanup', type(self), type(self).__name__)

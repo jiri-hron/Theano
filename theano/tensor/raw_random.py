@@ -403,8 +403,7 @@ def _infer_ndim_bcast(ndim, shape, *args):
         raise TypeError("shape must be a vector or list of scalar, got '%s'" %
                         v_shape)
 
-    if (not (v_shape.dtype.startswith('int') or
-             v_shape.dtype.startswith('uint'))):
+    if v_shape.dtype not in theano.tensor.integer_dtypes:
         raise TypeError('shape must be an integer vector or list',
                         v_shape.dtype)
 
@@ -647,11 +646,6 @@ def choice(random_state, size=None, a=2, replace=True, p=None, ndim=None,
     If size is None, a scalar will be returned.
 
     """
-    # numpy.random.choice is only available for numpy versions >= 1.7
-    major, minor, _ = numpy.version.short_version.split('.')
-    if (int(major), int(minor)) < (1, 7):
-        raise ImportError('choice requires at NumPy version >= 1.7 '
-                          '(%s)' % numpy.__version__)
     a = tensor.as_tensor_variable(a)
     if isinstance(replace, bool):
         replace = tensor.constant(replace, dtype='int8')

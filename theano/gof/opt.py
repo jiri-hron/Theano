@@ -15,7 +15,7 @@ import time
 import warnings
 import traceback
 
-import numpy
+import numpy as np
 
 import theano
 from theano import config
@@ -858,6 +858,15 @@ class MergeOptimizer(Optimizer):
                                 hasattr(c.op, 'destroy_map')]) > 1:
                             continue
 
+                if len(pairs) == 1 and pairs[0][0].type != pairs[0][1].type:
+                    res = pairs[0][0].type.convert_variable(pairs[0][1])
+
+                    # Since the fgraph.replace only checks the convert_variable
+                    # in one way, we change the order in the case that
+                    # convert_variable will not be successful.
+                    if not res:
+                        pairs = [(pairs[0][1], pairs[0][0])]
+
                 try:
                     fgraph.replace_all_validate(pairs, 'MergeOptimizer')
                 except InconsistencyError:
@@ -865,6 +874,7 @@ class MergeOptimizer(Optimizer):
                     nb_fail += 1
                     fgraph.merge_feature.blacklist.append(
                         (pairs[0][0].owner, pairs[0][1].owner))
+
                 if success:
                     nb_merged += len(pairs)
                     if isinstance(pairs[0][0], graph.Constant):
@@ -1695,8 +1705,7 @@ class PatternSub(LocalOptimizer):
                     u = u.merge(expr, v)
             elif (isinstance(pattern, (integer_types, float)) and
                     isinstance(expr, graph.Constant)):
-                if numpy.all(
-                        theano.tensor.constant(pattern).value == expr.value):
+                if np.all(theano.tensor.constant(pattern).value == expr.value):
                     return u
                 else:
                     return retry_with_equiv()
@@ -2430,25 +2439,20 @@ class EquilibriumOptimizer(NavigatorOptimizer):
                 if node is not current_node:
                     q.append(node)
 
-            def pruner(node):
-                if node is not current_node:
-                    try:
-                        q.remove(node)
-                    except ValueError:
-                        pass
             chin = None
             if self.tracks_on_change_inputs:
                 def chin(node, i, r, new_r, reason):
                     if node is not current_node and not isinstance(node, str):
                         q.append(node)
-            u = self.attach_updater(fgraph, importer, pruner,
+            u = self.attach_updater(fgraph, importer, None,
                                     chin=chin,
                                     name=getattr(self, 'name', None))
             try:
                 while q:
                     node = q.pop()
+                    if node not in fgraph.apply_nodes:
+                        continue
                     current_node = node
-
                     for lopt in (self.local_optimizers_all +
                                  self.local_optimizers_map.get(type(node.op), []) +
                                  self.local_optimizers_map.get(node.op, [])):
@@ -2515,10 +2519,14 @@ class EquilibriumOptimizer(NavigatorOptimizer):
         end_nb_nodes = len(fgraph.apply_nodes)
 
         if max_use_abort:
-            _logger.error("EquilibriumOptimizer max'ed out by '%s'" % opt_name +
-                          ". You can safely raise the current threshold of " +
-                          "%f with the theano flag 'optdb.max_use_ratio'." %
-                          config.optdb.max_use_ratio)
+            msg = ("EquilibriumOptimizer max'ed out by '%s'" % opt_name +
+                   ". You can safely raise the current threshold of " +
+                   "%f with the theano flag 'optdb.max_use_ratio'." %
+                   config.optdb.max_use_ratio)
+            if theano.config.on_opt_error == 'raise':
+                raise AssertionError(msg)
+            else:
+                _logger.error(msg)
         fgraph.remove_feature(change_tracker)
         assert len(loop_process_count) == len(loop_timing)
         assert len(loop_process_count) == len(global_opt_timing)

@@ -66,7 +66,7 @@ from theano.gof import PureOp, Apply
 from theano.gof.graph import io_connection_pattern
 from theano.gof.toolbox import NoOutputFromInplace
 from theano.compat import izip
-from theano.tensor import TensorType
+from theano.tensor import as_tensor_variable, TensorType
 from theano.tensor.opt import Shape_i
 from theano.gradient import grad_undefined, DisconnectedType, NullType
 from six import string_types
@@ -349,7 +349,8 @@ class Scan(PureOp):
         assert n_outer_ins == n_inner_ins, \
             ("The number of inputs given to the inner function of scan"
              " does not match the number of inputs given to scan.")
-        new_inputs = [inputs[0]]
+        # Force the inputs to be on the CPU
+        new_inputs = [as_tensor_variable(inputs[0])]
         # assert dtype is consistent
         err_msg1 = ('When compiling the inner function of scan (the '
                     'function called by scan in each of its iterations) '
@@ -402,6 +403,36 @@ class Scan(PureOp):
                     'by using dimshuffle or shape_padleft. '
                     )
 
+        def check_broadcast(v1, v2):
+            """ Checks that the broadcast pattern of v1 and v2.
+
+            Controls that the broadcast pattern of the variable provided as
+            input to `scan` matches the broadcast pattern provided in
+            `output_info`. It raises an error when they don't match. The
+            typical case is when the user provides either the input or the
+            `output_info` (but not both) with a dimension fixed to 1,
+            which may wrongly be interpreted as broadcastable.
+
+            """
+            if (not hasattr(v1, 'broadcastable') and
+                    not hasattr(v2, 'broadcastable')):
+                return
+            msg = ("The broadcast pattern of the output of scan (%s) is "
+                   "inconsistent with the one provided in `output_info` "
+                   "(%s). The output on axis %d is `%r`, but it is `%r` on "
+                   "axis %d in `output_info`. This can happen if one of the "
+                   "dimension is fixed to 1 in the input, while it is still "
+                   "variable in the output, or vice-verca. You have to make "
+                   "them consistent, e.g. using theano.tensor."
+                   "{patternbroadcast,unbroadcast,addbroadcast}.")
+            size = min(len(v1.broadcastable), len(v2.broadcastable))
+            for n, (b1, b2) in enumerate(zip(v1.broadcastable[-size:],
+                                             v2.broadcastable[-size:])):
+                if b1 != b2:
+                    a1 = n + size - len(v1.broadcastable) + 1
+                    a2 = n + size - len(v2.broadcastable) + 1
+                    raise TypeError(msg % (v1.type, v2.type, a1, b1, b2, a2))
+
         def format(var, as_var):
             """
             This functions ensures that ``out`` has the same dtype as
@@ -429,13 +460,14 @@ class Scan(PureOp):
         argoffset = 0
         for inner_seq, outer_seq in zip(self.inner_seqs(self.inputs),
                                         self.outer_seqs(inputs)):
+            check_broadcast(outer_seq, inner_seq)
             new_inputs.append(format(outer_seq, as_var=inner_seq))
 
         argoffset += len(self.outer_seqs(inputs))
         # Check that this 3 things have the same dtype for mit_mot:
         #   - initial state of the output
-        #   - variable representing an input slice of the otuput
-        #   - variable representing an output slice of the otuput
+        #   - variable representing an input slice of the output
+        #   - variable representing an output slice of the output
         ipos = 0
         opos = 0
         inner_mitmot = self.inner_mitmot(self.inputs)
@@ -587,7 +619,8 @@ class Scan(PureOp):
         # in this case is just a int saying how many steps of this output we
         # need to store. This input does not have the same dtype, nor is it the same
         # type of tensor as the output, it is always a scalar int.
-        new_inputs += self.outer_nitsot(inputs)
+        new_inputs += [as_tensor_variable(ons)
+                       for ons in self.outer_nitsot(inputs)]
         for inner_nonseq, _outer_nonseq in zip(self.inner_non_seqs(self.inputs),
                                                self.outer_non_seqs(inputs)):
             outer_nonseq = format(_outer_nonseq, as_var=inner_nonseq)
@@ -601,7 +634,7 @@ class Scan(PureOp):
             # For every nit_sot input we get as input a int/uint that
             # depicts the size in memory for that sequence. This feature is
             # used by truncated BPTT and by scan space optimization
-            if (str(outer_nitsot.type.dtype)[:3] not in ('uin', 'int') or
+            if (str(outer_nitsot.type.dtype) not in tensor.integer_dtypes or
                     outer_nitsot.ndim != 0):
                 raise ValueError('For output %s you need to provide a '
                                  'scalar int !', str(outer_nitsot))
@@ -610,16 +643,17 @@ class Scan(PureOp):
         # The vector_seqs and vector_outs are just a workaround
         # strange NumPy behavior: vector_ndarray[int] return a NumPy
         # scalar and not a NumPy ndarray of 0 dimensions.
-        self.vector_seqs = [isinstance(seq, (tensor.TensorVariable,
-                                             tensor.TensorConstant)) and
-                            seq.ndim == 1 for seq in
-                            new_inputs[1:1 + self.n_seqs]]
-        self.vector_outs = [isinstance(arg, (tensor.TensorVariable,
-                                             tensor.TensorConstant)) and
-                            arg.ndim == 1 for arg in
-                            new_inputs[1 + self.n_seqs: (1 + self.n_seqs +
-                                                         self.n_outs)]]
-        self.vector_outs += [False] * self.n_nit_sot
+        def is_cpu_vector(s):
+            return isinstance(s.type, tensor.TensorType) and s.ndim == 1
+
+        self.vector_seqs = [
+            is_cpu_vector(seq) for seq in new_inputs[1:1 + self.n_seqs]]
+        self.vector_outs = [
+            is_cpu_vector(arg) for arg in new_inputs[
+                1 + self.n_seqs: (1 + self.n_seqs + self.n_outs)]]
+        self.vector_outs += [
+            isinstance(t.type, tensor.TensorType) and t.ndim == 0
+            for t in self.outer_nitsot_outs(self.outputs)]
 
         apply_node = Apply(self,
                            new_inputs,
@@ -773,9 +807,11 @@ class Scan(PureOp):
                         # function exectution. Also, since an update is
                         # defined, a default value must also be (this is
                         # verified by DebugMode). Use an array of size 0 but
-                        # the right ndim and dtype.
-                        default_val = numpy.zeros([0] * inp.ndim,
-                                                  dtype=inp.dtype)
+                        # the right ndim and dtype (use a shape of 1 on
+                        # broadcastable dimensions, 0 on the others).
+                        default_shape = [1 if _b else 0
+                                         for _b in inp.broadcastable]
+                        default_val = inp.type.value_zeros(default_shape)
                         wrapped_inp = In(variable=inp, value=default_val,
                                          update=self.outputs[output_idx])
                         wrapped_inputs.append(wrapped_inp)
@@ -1458,8 +1494,6 @@ class Scan(PureOp):
                     jout = j + offset_out
                     shape = (store_steps[j],) + \
                         output_storage[jout].storage[0].shape
-                    if len(output_storage[jout].storage[0].shape) == 0:
-                        self.vector_outs[j] = True
                     dtype = output_storage[jout].storage[0].dtype
                     if (outs[j][0] is None or
                             outs[j][0].shape[0] < store_steps[j] or
@@ -1929,8 +1963,7 @@ class Scan(PureOp):
         return mappings
 
     # GRAD FUNCTION
-    def grad(self, inputs, dC_douts):
-        outs = self(*inputs)
+    def L_op(self, inputs, outs, dC_douts):
         if not isinstance(outs, (list, tuple)):
             outs = [outs]
         # `grad_step` equals the number of steps the original scan node has
@@ -2009,7 +2042,7 @@ class Scan(PureOp):
             g_y_s = known_grads.values()
 
             for g_y in g_y_s:
-                if 'int' in str(g_y.dtype):
+                if str(g_y.dtype) in tensor.integer_dtypes:
                     raise TypeError("Gradients may never be integers but g_y "
                                     "has type " + str(g_y.type))
 

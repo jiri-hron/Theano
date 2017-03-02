@@ -4,7 +4,7 @@ import unittest
 import copy
 import itertools
 
-import numpy
+import numpy as np
 import theano
 from theano import gradient
 from theano import tensor
@@ -81,7 +81,7 @@ def test_pool2d():
             (3, 2, 6, 6, 6, 5),
             (3, 2, 6, 6, 6, 5, 7), ]
 
-    numpy.random.RandomState(utt.fetch_seed()).shuffle(shps)
+    np.random.RandomState(utt.fetch_seed()).shuffle(shps)
     test_ws = (2, 2), (3, 2), (1, 1)
     test_st = (2, 2), (3, 2), (1, 1)
     test_mode = ['max', 'sum', 'average_inc_pad', 'average_exc_pad']
@@ -113,7 +113,7 @@ def test_pool2d():
                             for node in f.maker.fgraph.toposort()])
                 assert any([isinstance(node.op, Pool)
                             for node in f2.maker.fgraph.toposort()])
-                assert numpy.allclose(f(), f2()), (shp, ws, st, pad, mode, ignore_border)
+                assert np.allclose(f(), f2()), (shp, ws, st, pad, mode, ignore_border)
 
                 a_pooled_grad = tensor.grad(a_pooled.sum(), a)
 
@@ -131,12 +131,27 @@ def test_pool2d():
                 assert any([isinstance(node.op, gop2)
                             for node in g2.maker.fgraph.toposort()])
 
-                assert numpy.allclose(g(), g2()), (shp, ws, st, pad, mode, ignore_border)
+                assert np.allclose(g(), g2()), (shp, ws, st, pad, mode, ignore_border)
 
-                # test grad grad for max pooling
+                # test rop and grad grad for max pooling
                 # for average pooling grad grad is just average pooling grad
                 if mode != 'max':
                     continue
+
+                ea = theano.shared(rand(*shp), 'ea')
+
+                gr = theano.function([], tensor.Rop(a_pooled, a, ea), mode=gpu_mode)
+                gr2 = theano.function([], tensor.Rop(a_pooled, a, ea), mode=ref_mode)
+
+                assert any([
+                    isinstance(node.op, GpuDownsampleFactorMaxGradGrad)
+                    for node in gr.maker.fgraph.toposort()
+                ])
+                assert any([
+                    isinstance(node.op, DownsampleFactorMaxGradGrad)
+                    for node in gr2.maker.fgraph.toposort()
+                ])
+                assert np.allclose(gr(), gr2()), (shp, ws, st, pad, mode, ignore_border)
 
                 ggf = gradient.Lop(tensor.grad((a_pooled**2).sum(), a), a, a)
 
@@ -151,7 +166,7 @@ def test_pool2d():
                     isinstance(node.op, DownsampleFactorMaxGradGrad)
                     for node in gg2.maker.fgraph.toposort()
                 ])
-                assert numpy.allclose(gg(), gg2()), (shp, ws, st, pad, mode, ignore_border)
+                assert np.allclose(gg(), gg2()), (shp, ws, st, pad, mode, ignore_border)
 
 
 def test_pool3d():
@@ -176,7 +191,7 @@ def test_pool3d():
             (3, 2, 6, 6, 6, 5),
             (3, 2, 6, 6, 6, 5, 7), ]
 
-    numpy.random.RandomState(utt.fetch_seed()).shuffle(shps)
+    np.random.RandomState(utt.fetch_seed()).shuffle(shps)
     test_ws = (2, 2, 2), (3, 2, 3), (1, 1, 1)
     test_st = (2, 2, 2), (2, 3, 2), (1, 1, 1)
     test_mode = ['max', 'sum', 'average_inc_pad', 'average_exc_pad']
@@ -208,7 +223,7 @@ def test_pool3d():
                             for node in f.maker.fgraph.toposort()])
                 assert any([isinstance(node.op, Pool)
                             for node in f2.maker.fgraph.toposort()])
-                assert numpy.allclose(f(), f2()), (shp, ws, st, pad, mode, ignore_border)
+                assert np.allclose(f(), f2()), (shp, ws, st, pad, mode, ignore_border)
 
                 a_pooled_grad = tensor.grad(a_pooled.sum(), a)
 
@@ -226,12 +241,27 @@ def test_pool3d():
                 assert any([isinstance(node.op, gop2)
                             for node in g2.maker.fgraph.toposort()])
 
-                assert numpy.allclose(g(), g2()), (shp, ws, st, pad, mode, ignore_border)
+                assert np.allclose(g(), g2()), (shp, ws, st, pad, mode, ignore_border)
 
-                # test grad grad for max pooling
+                # test rop and grad grad for max pooling
                 # for average pooling grad grad is just average pooling grad
                 if mode != 'max':
                     continue
+
+                ea = theano.shared(rand(*shp), 'ea')
+
+                gr = theano.function([], tensor.Rop(a_pooled, a, ea), mode=gpu_mode)
+                gr2 = theano.function([], tensor.Rop(a_pooled, a, ea), mode=ref_mode)
+
+                assert any([
+                    isinstance(node.op, GpuDownsampleFactorMaxGradGrad)
+                    for node in gr.maker.fgraph.toposort()
+                ])
+                assert any([
+                    isinstance(node.op, DownsampleFactorMaxGradGrad)
+                    for node in gr2.maker.fgraph.toposort()
+                ])
+                assert np.allclose(gr(), gr2()), (shp, ws, st, pad, mode, ignore_border)
 
                 ggf = gradient.Lop(tensor.grad((a_pooled**2).sum(), a), a, a)
 
@@ -246,4 +276,4 @@ def test_pool3d():
                     isinstance(node.op, DownsampleFactorMaxGradGrad)
                     for node in gg2.maker.fgraph.toposort()
                 ])
-                assert numpy.allclose(gg(), gg2()), (shp, ws, st, pad, mode, ignore_border)
+                assert np.allclose(gg(), gg2()), (shp, ws, st, pad, mode, ignore_border)

@@ -7,6 +7,7 @@ from nose.tools import assert_raises, assert_true
 
 import theano
 from theano import tensor
+from theano.configparser import change_flags
 from theano.gof.opt import check_stack_trace
 from theano.tests import unittest_tools as utt
 from theano.tensor.nnet import (corr, corr3d, conv2d_transpose,
@@ -229,6 +230,7 @@ class TestAssertConvShape(unittest.TestCase):
 
 
 class TestAssertShape(unittest.TestCase):
+    @change_flags([("conv.assert_shape", True)])
     def test_basic(self):
         x = tensor.tensor4()
         s1 = tensor.iscalar()
@@ -244,6 +246,7 @@ class TestAssertShape(unittest.TestCase):
         assert_raises(AssertionError, f, v, 0, 7)
         assert_raises(AssertionError, f, v, 7, 7)
 
+    @change_flags([("conv.assert_shape", True)])
     def test_shape_check_conv2d(self):
         input = tensor.tensor4()
         filters = tensor.tensor4()
@@ -261,6 +264,7 @@ class TestAssertShape(unittest.TestCase):
                       numpy.zeros((3, 5, 7, 11), dtype='float32'),
                       numpy.zeros((7, 5, 2, 2), dtype='float32'))
 
+    @change_flags([("conv.assert_shape", True)])
     def test_shape_check_conv3d(self):
         input = tensor.tensor5()
         filters = tensor.tensor5()
@@ -278,6 +282,7 @@ class TestAssertShape(unittest.TestCase):
                       numpy.zeros((3, 5, 7, 11, 13), dtype='float32'),
                       numpy.zeros((7, 5, 2, 2, 2), dtype='float32'))
 
+    @change_flags([("conv.assert_shape", True)])
     def test_shape_check_conv2d_grad_wrt_inputs(self):
         output_grad = tensor.tensor4()
         filters = tensor.tensor4()
@@ -291,6 +296,7 @@ class TestAssertShape(unittest.TestCase):
                       numpy.zeros((3, 6, 5, 9), dtype='float32'),
                       numpy.zeros((7, 6, 3, 3), dtype='float32'))
 
+    @change_flags([("conv.assert_shape", True)])
     def test_shape_check_conv3d_grad_wrt_inputs(self):
         output_grad = tensor.tensor5()
         filters = tensor.tensor5()
@@ -304,6 +310,7 @@ class TestAssertShape(unittest.TestCase):
                       numpy.zeros((3, 6, 5, 9, 11), dtype='float32'),
                       numpy.zeros((7, 6, 3, 3, 3), dtype='float32'))
 
+    @change_flags([("conv.assert_shape", True)])
     def test_shape_check_conv2d_grad_wrt_weights(self):
         input = tensor.tensor4()
         output_grad = tensor.tensor4()
@@ -317,6 +324,7 @@ class TestAssertShape(unittest.TestCase):
                       numpy.zeros((3, 6, 7, 11), dtype='float32'),
                       numpy.zeros((3, 7, 5, 9), dtype='float32'))
 
+    @change_flags([("conv.assert_shape", True)])
     def test_shape_check_conv3d_grad_wrt_weights(self):
         input = tensor.tensor5()
         output_grad = tensor.tensor5()
@@ -1586,3 +1594,109 @@ class TestConv2dTranspose(unittest.TestCase):
                [2, 2, 4, 4, 4, 4, 4, 4, 2, 2],
                [2, 2, 4, 4, 4, 4, 4, 4, 2, 2]]]] * 2)
         numpy.testing.assert_equal(output, expected_output)
+
+
+class TestConv2dGrads(unittest.TestCase):
+
+    def setUp(self):
+
+        if (not theano.config.cxx or
+                theano.config.mode == "FAST_COMPILE"):
+            raise SkipTest("Need blas to test conv2d")
+
+        self.random_stream = numpy.random.RandomState(utt.fetch_seed())
+
+        self.inputs_shapes = [(8, 1, 12, 12), (1, 1, 5, 5), (1, 1, 5, 6), (1, 1, 6, 6)]
+        self.filters_shapes = [(5, 1, 2, 2), (1, 1, 3, 3)]
+
+        self.subsamples = [(1, 1), (2, 2)]
+        self.border_modes = ["valid", "full"]
+        self.filter_flip = [True, False]
+
+        self.output_grad = theano.tensor.tensor4()
+        self.output_grad_wrt = theano.tensor.tensor4()
+
+        self.x = theano.tensor.tensor4('x', theano.config.floatX)  # inputs
+        self.w = theano.tensor.tensor4('w', theano.config.floatX)  # filter weights
+
+    def test_conv2d_grad_wrt_inputs(self):
+        """Compares calculated abstract grads wrt inputs with the fwd grads
+        This method checks the outputs of conv2_grad_wrt_inputs against
+        the outputs of T.nnet.conv forward grads to make sure the
+        results are the same.
+        """
+
+        for (in_shape, fltr_shape) in zip(self.inputs_shapes, self.filters_shapes):
+            for bm in self.border_modes:
+                for ss in self.subsamples:
+                    for ff in self.filter_flip:
+                        input_val = self.random_stream.random_sample(in_shape).astype(theano.config.floatX)
+                        filter_val = self.random_stream.random_sample(fltr_shape).astype(theano.config.floatX)
+                        out_grad_shape = theano.tensor.nnet.abstract_conv.get_conv_output_shape(image_shape=in_shape,
+                                                                                                kernel_shape=fltr_shape,
+                                                                                                border_mode=bm,
+                                                                                                subsample=ss)
+                        out_grad_val = self.random_stream.random_sample(out_grad_shape).astype(theano.config.floatX)
+                        conv_out = theano.tensor.nnet.conv2d(self.x,
+                                                             filters=self.w,
+                                                             border_mode=bm,
+                                                             subsample=ss,
+                                                             input_shape=in_shape,
+                                                             filter_shape=fltr_shape,
+                                                             filter_flip=ff
+                                                             )
+                        conv_grad = theano.grad(conv_out.sum(), wrt=self.x, known_grads={conv_out: self.output_grad})
+                        f_old = theano.function([self.x, self.w, self.output_grad], conv_grad)
+
+                        conv_wrt_i_out = theano.tensor.nnet.abstract_conv.conv2d_grad_wrt_inputs(output_grad=self.output_grad_wrt,
+                                                                                                 filters=self.w,
+                                                                                                 border_mode=bm,
+                                                                                                 subsample=ss,
+                                                                                                 input_shape=in_shape,
+                                                                                                 filter_shape=fltr_shape,
+                                                                                                 filter_flip=ff
+                                                                                                 )
+                        f_new = theano.function([self.w, self.output_grad_wrt], conv_wrt_i_out)
+
+                        # check that they're equal
+                        utt.assert_allclose(f_new(filter_val, out_grad_val), f_old(input_val, filter_val, out_grad_val))
+
+    def test_conv2d_grad_wrt_weights(self):
+        """Compares calculated abstract grads wrt weights with the fwd grads
+        This method checks the outputs of conv2_grad_wrt_weights against
+        the outputs of T.nnet.conv forward grads to make sure the
+        results are the same.
+        """
+
+        for (in_shape, fltr_shape) in zip(self.inputs_shapes, self.filters_shapes):
+            for bm in self.border_modes:
+                for ss in self.subsamples:
+                    for ff in self.filter_flip:
+                        input_val = self.random_stream.random_sample(in_shape).astype(theano.config.floatX)
+                        filter_val = self.random_stream.random_sample(fltr_shape).astype(theano.config.floatX)
+                        out_grad_shape = theano.tensor.nnet.abstract_conv.get_conv_output_shape(image_shape=in_shape,
+                                                                                                kernel_shape=fltr_shape,
+                                                                                                border_mode=bm,
+                                                                                                subsample=ss)
+                        out_grad_val = self.random_stream.random_sample(out_grad_shape).astype(theano.config.floatX)
+                        conv_out = theano.tensor.nnet.conv2d(self.x,
+                                                             filters=self.w,
+                                                             border_mode=bm,
+                                                             subsample=ss,
+                                                             input_shape=in_shape,
+                                                             filter_shape=fltr_shape,
+                                                             filter_flip=ff
+                                                             )
+                        conv_grad = theano.grad(conv_out.sum(), wrt=self.w, known_grads={conv_out: self.output_grad})
+                        f_old = theano.function([self.x, self.w, self.output_grad], conv_grad)
+
+                        conv_wrt_w_out = theano.tensor.nnet.abstract_conv.conv2d_grad_wrt_weights(self.x,
+                                                                                                  output_grad=self.output_grad_wrt,
+                                                                                                  border_mode=bm,
+                                                                                                  subsample=ss,
+                                                                                                  input_shape=in_shape,
+                                                                                                  filter_shape=fltr_shape,
+                                                                                                  filter_flip=ff
+                                                                                                  )
+                        f_new = theano.function([self.x, self.output_grad_wrt], conv_wrt_w_out)
+                        utt.assert_allclose(f_new(input_val, out_grad_val), f_old(input_val, filter_val, out_grad_val))

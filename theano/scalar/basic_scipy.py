@@ -1,9 +1,11 @@
 from __future__ import absolute_import, print_function, division
-# definition theano.scalar op that have their python implementation taked from scipy
-# as scipy is not always available, we treat them separatly
+# Definitions of theano.scalar ops that have their python implementation taken
+# from SciPy. As SciPy is not always available, we treat them separately.
+
 import numpy
 
 import theano
+from theano.gradient import grad_not_implemented
 from theano.scalar.basic import (UnaryScalarOp, BinaryScalarOp,
                                  exp, upgrade_to_float,
                                  upgrade_to_float64,
@@ -30,12 +32,12 @@ class Erf(UnaryScalarOp):
         else:
             super(Erf, self).impl(x)
 
-    def grad(self, inp, grads):
-        x, = inp
+    def L_op(self, inputs, outputs, grads):
+        x, = inputs
         gz, = grads
         if x.type in complex_types:
             raise NotImplementedError()
-        if self(x).type in discrete_types:
+        if outputs[0].type in discrete_types:
             if x.type in discrete_types:
                 return [x.zeros_like(dtype=theano.config.floatX)]
             else:
@@ -61,12 +63,12 @@ class Erfc(UnaryScalarOp):
         else:
             super(Erfc, self).impl(x)
 
-    def grad(self, inp, grads):
-        x, = inp
+    def L_op(self, inputs, outputs, grads):
+        x, = inputs
         gz, = grads
         if x.type in complex_types:
             raise NotImplementedError()
-        if self(x).type in discrete_types:
+        if outputs[0].type in discrete_types:
             if x.type in discrete_types:
                 return [x.zeros_like(dtype=theano.config.floatX)]
             else:
@@ -108,12 +110,12 @@ class Erfcx(UnaryScalarOp):
         else:
             super(Erfcx, self).impl(x)
 
-    def grad(self, inp, grads):
-        x, = inp
+    def L_op(self, inputs, outputs, grads):
+        x, = inputs
         gz, = grads
         if x.type in complex_types:
             raise NotImplementedError()
-        if self(x).type in discrete_types:
+        if outputs[0].type in discrete_types:
             if x.type in discrete_types:
                 return [x.zeros_like(dtype=theano.config.floatX)]
             else:
@@ -144,12 +146,12 @@ class Erfinv(UnaryScalarOp):
         else:
             super(Erfinv, self).impl(x)
 
-    def grad(self, inp, grads):
-        x, = inp
+    def L_op(self, inputs, outputs, grads):
+        x, = inputs
         gz, = grads
         if x.type in complex_types:
             raise NotImplementedError()
-        if self(x).type in discrete_types:
+        if outputs[0].type in discrete_types:
             if x.type in discrete_types:
                 return [x.zeros_like(dtype=theano.config.floatX)]
             else:
@@ -177,12 +179,12 @@ class Erfcinv(UnaryScalarOp):
         else:
             super(Erfcinv, self).impl(x)
 
-    def grad(self, inp, grads):
-        x, = inp
+    def L_op(self, inputs, outputs, grads):
+        x, = inputs
         gz, = grads
         if x.type in complex_types:
             raise NotImplementedError()
-        if self(x).type in discrete_types:
+        if outputs[0].type in discrete_types:
             if x.type in discrete_types:
                 return [x.zeros_like(dtype=theano.config.floatX)]
             else:
@@ -214,12 +216,12 @@ class Gamma(UnaryScalarOp):
         else:
             super(Gamma, self).impl(x)
 
-    def grad(self, inputs, gout):
+    def L_op(self, inputs, outputs, gout):
         (x,) = inputs
         (gz,) = gout
         if x.type in complex_types:
             raise NotImplementedError()
-        if self(x).type in discrete_types:
+        if outputs[0].type in discrete_types:
             if x.type in discrete_types:
                 return [x.zeros_like(dtype=theano.config.floatX)]
             else:
@@ -251,12 +253,12 @@ class GammaLn(UnaryScalarOp):
         else:
             super(GammaLn, self).impl(x)
 
-    def grad(self, inp, grads):
-        x, = inp
+    def L_op(self, inputs, outputs, grads):
+        x, = inputs
         gz, = grads
         if x.type in complex_types:
             raise NotImplementedError()
-        if self(x).type in discrete_types:
+        if outputs[0].type in discrete_types:
             if x.type in discrete_types:
                 return [x.zeros_like(dtype=theano.config.floatX)]
             else:
@@ -460,9 +462,33 @@ class Chi2SF(BinaryScalarOp):
 chi2sf = Chi2SF(upgrade_to_float64, name='chi2sf')
 
 
+class Jv(BinaryScalarOp):
+    """
+    Bessel function of the first kind of order v (real).
+    """
+
+    @staticmethod
+    def st_impl(v, x):
+        return scipy.special.jv(v, x)
+
+    def impl(self, v, x):
+        if imported_scipy_special:
+            return self.st_impl(v, x)
+        else:
+            super(Jv, self).impl(v, x)
+
+    def grad(self, inputs, grads):
+        v, x = inputs
+        gz, = grads
+        return [grad_not_implemented(self, 0, v),
+                gz * (jv(v - 1, x) - jv(v + 1, x)) / 2.]
+
+jv = Jv(upgrade_to_float, name='jv')
+
+
 class J1(UnaryScalarOp):
     """
-    Bessel function of the 1'th kind
+    Bessel function of the first kind of order 1.
     """
 
     @staticmethod
@@ -475,8 +501,10 @@ class J1(UnaryScalarOp):
         else:
             super(J1, self).impl(x)
 
-    def grad(self, inp, grads):
-        raise NotImplementedError()
+    def grad(self, inputs, grads):
+        x, = inputs
+        gz, = grads
+        return [gz * (j0(x) - jv(2, x)) / 2.]
 
     def c_code(self, node, name, inp, out, sub):
         x, = inp
@@ -485,12 +513,13 @@ class J1(UnaryScalarOp):
             return """%(z)s =
                 j1(%(x)s);""" % locals()
         raise NotImplementedError('only floating point is implemented')
+
 j1 = J1(upgrade_to_float, name='j1')
 
 
 class J0(UnaryScalarOp):
     """
-    Bessel function of the 0'th kind
+    Bessel function of the first kind of order 0.
     """
 
     @staticmethod
@@ -515,4 +544,75 @@ class J0(UnaryScalarOp):
             return """%(z)s =
                 j0(%(x)s);""" % locals()
         raise NotImplementedError('only floating point is implemented')
+
 j0 = J0(upgrade_to_float, name='j0')
+
+
+class Iv(BinaryScalarOp):
+    """
+    Modified Bessel function of the first kind of order v (real).
+    """
+
+    @staticmethod
+    def st_impl(v, x):
+        return scipy.special.iv(v, x)
+
+    def impl(self, v, x):
+        if imported_scipy_special:
+            return self.st_impl(v, x)
+        else:
+            super(Iv, self).impl(v, x)
+
+    def grad(self, inputs, grads):
+        v, x = inputs
+        gz, = grads
+        return [grad_not_implemented(self, 0, v),
+                gz * (iv(v - 1, x) + iv(v + 1, x)) / 2.]
+
+iv = Iv(upgrade_to_float, name='iv')
+
+
+class I1(UnaryScalarOp):
+    """
+    Modified Bessel function of the first kind of order 1.
+    """
+
+    @staticmethod
+    def st_impl(x):
+        return scipy.special.i1(x)
+
+    def impl(self, x):
+        if imported_scipy_special:
+            return self.st_impl(x)
+        else:
+            super(I1, self).impl(x)
+
+    def grad(self, inputs, grads):
+        x, = inputs
+        gz, = grads
+        return [gz * (i0(x) + iv(2, x)) / 2.]
+
+i1 = I1(upgrade_to_float, name='i1')
+
+
+class I0(UnaryScalarOp):
+    """
+    Modified Bessel function of the first kind of order 0.
+    """
+
+    @staticmethod
+    def st_impl(x):
+        return scipy.special.i0(x)
+
+    def impl(self, x):
+        if imported_scipy_special:
+            return self.st_impl(x)
+        else:
+            super(I0, self).impl(x)
+
+    def grad(self, inp, grads):
+        x, = inp
+        gz, = grads
+        return [gz * i1(x)]
+
+i0 = I0(upgrade_to_float, name='i0')

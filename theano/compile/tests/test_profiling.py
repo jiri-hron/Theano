@@ -35,7 +35,7 @@ class Test_profiling(unittest.TestCase):
             z += [T.outer(x[i], x[i + 1]).sum(axis=1) for i in range(len(x) - 1)]
             z += [x[i] + x[i + 1] for i in range(len(x) - 1)]
 
-            p = theano.ProfileStats(False)
+            p = theano.ProfileStats(False, gpu_checks=False)
 
             if theano.config.mode in ["DebugMode", "DEBUG_MODE", "FAST_COMPILE"]:
                 m = "FAST_RUN"
@@ -56,8 +56,8 @@ class Test_profiling(unittest.TestCase):
             lines1 = [l for l in the_string.split("\n") if "Max if linker" in l]
             lines2 = [l for l in the_string.split("\n") if "Minimum peak" in l]
             if theano.config.device == 'cpu':
-                assert "CPU: 4112KB (8204KB)" in the_string, (lines1, lines2)
-                assert "CPU: 8204KB (12296KB)" in the_string, (lines1, lines2)
+                assert "CPU: 4112KB (4104KB)" in the_string, (lines1, lines2)
+                assert "CPU: 8204KB (8196KB)" in the_string, (lines1, lines2)
                 assert "CPU: 8208KB" in the_string, (lines1, lines2)
                 assert "Minimum peak from all valid apply node order is 4104KB" in the_string, (
                     lines1, lines2)
@@ -87,7 +87,7 @@ class Test_profiling(unittest.TestCase):
 
             z = ifelse(T.lt(a, b), x * 2, y * 2)
 
-            p = theano.ProfileStats(False)
+            p = theano.ProfileStats(False, gpu_checks=False)
 
             if theano.config.mode in ["DebugMode", "DEBUG_MODE", "FAST_COMPILE"]:
                 m = "FAST_RUN"

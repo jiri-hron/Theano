@@ -1838,20 +1838,20 @@ class T_Scan(unittest.TestCase):
         n_in = 1
         n_out = 1
 
-        W_hh_v = asarrayX(rng.uniform(size=(n_hid, n_hid), low=-.01, high=.01))
-        h0_v = asarrayX(rng.uniform(size=(2, n_hid), low=-.01, high=.01))
+        W_hh_v = asarrayX(rng.uniform(size=(n_hid, n_hid), low=-1, high=1))
+        h0_v = asarrayX(rng.uniform(size=(2, n_hid), low=-1, high=1))
         b_h_v = asarrayX(rng.uniform(size=(n_hid), low=-.01, high=.01))
-        W_ih_v = asarrayX(rng.uniform(size=(n_in, n_hid), low=-.01, high=.01))
-        W_ho_v = asarrayX(rng.uniform(size=(n_hid, n_out), low=-.01, high=.01))
+        W_ih_v = asarrayX(rng.uniform(size=(n_in, n_hid), low=-1, high=1))
+        W_ho_v = asarrayX(rng.uniform(size=(n_hid, n_out), low=-1, high=1))
         b_o_v = asarrayX(rng.uniform(size=(n_out), low=-.01, high=.01))
 
         # parameters of the rnn
-        b_h = theano.shared(b_h_v)
-        h0 = theano.shared(h0_v)
-        W_ih = theano.shared(W_ih_v)
-        W_hh = theano.shared(W_hh_v)
-        W_ho = theano.shared(W_ho_v)
-        b_o = theano.shared(b_o_v)
+        b_h = theano.shared(b_h_v, name='b_h')
+        h0 = theano.shared(h0_v, name='h0')
+        W_ih = theano.shared(W_ih_v, name='W_ih')
+        W_hh = theano.shared(W_hh_v, name='W_hh')
+        W_ho = theano.shared(W_ho_v, name='W_ho')
+        b_o = theano.shared(b_o_v, name='b_o')
         params = [W_ih, W_hh, b_h, W_ho, b_o, h0]
 
         # first dimension is time
@@ -4483,13 +4483,10 @@ class T_Scan(unittest.TestCase):
             return tensor.dot(x, w_)
 
         ret_strict = theano.scan(_scan_loose,
-                               sequences=[],
-                               outputs_info=[x0_],
-                               n_steps=n,
-                               strict=True)
-
-        f_strict = theano.function([x0_], ret_strict[0][-1])
-        result_strict = f_strict(x0)
+                                 sequences=[],
+                                 outputs_info=[x0_],
+                                 n_steps=n,
+                                 strict=True)
 
     def test_monitor_mode(self):
         # Test that it is possible to pass an instance of MonitorMode
@@ -5518,3 +5515,17 @@ class TestInconsistentBroadcast(unittest.TestCase):
                                  sequences=x,
                                  outputs_info=[dict(initial=initial_x)])
         gs = tensor.grad(y.sum(), x)
+
+
+class TestMissingInputError(unittest.TestCase):
+
+    @raises(theano.gof.fg.MissingInputError)
+    def test_raise_error(self):
+        c = theano.shared(0.)
+        inc = tensor.scalar('inc')
+
+        def count_up():
+            return tensor.zeros(()), {c: c + inc}
+
+        _, updates = theano.scan(count_up, n_steps=20)
+        func = theano.function(inputs=[inc], outputs=[], updates=updates)

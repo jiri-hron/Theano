@@ -2204,7 +2204,7 @@ def local_cast_cast(node):
 
     when those contrain:
     dtype1 == dtype2
-    TODO: the base dtype is the same (int, uint, float, complex)
+    OR the base dtype is the same (int, uint, float, complex)
           and the first cast cause an upcast.
 
     """
@@ -2216,9 +2216,53 @@ def local_cast_cast(node):
             not isinstance(x.owner.op, T.Elemwise) or
             not isinstance(x.owner.op.scalar_op, scalar.Cast)):
         return
-    if node.op.scalar_op.o_type == x.owner.op.scalar_op.o_type:
+
+    type1 = x.owner.op.scalar_op.o_type
+    type2 = node.op.scalar_op.o_type
+    base = x.owner.inputs[0]
+
+    if type1 == type2:
         # We don't need to copy over any stack traces here
         return [x]
+
+    if(is_an_upcast(base.dtype, type1.dtype)):
+        # Checking for further redundancy. Eg: int8 -> int32 -> int8
+        if(type2.dtype == base.dtype):
+            return x.owner.inputs
+        else:
+            # Apply the second cast only
+            v = node.op(base)
+            # Copy stack trace from the output of the original cast
+            copy_stack_trace(node.outputs[0], v)
+            return [v]
+
+
+def is_an_upcast(type1, type2):
+    """Given two data types (as strings), check if converting to
+    type2 from type1 constitutes an upcast.
+    Differs from theano.scalar.upcast
+
+    """
+    category = {
+        # The first number in the pair is the dtype (bool, uint, int, float,
+        # complex). Conversion from higher to lower is never an upcast.
+        # The second number roughly indicates the precision. Again, conversion
+        # from higher to lower is never an upcast.
+
+        'bool': (0, 0),
+        'uint8': (1, 1), 'uint16': (1, 2), 'uint32': (1, 3), 'uint64': (1, 4),
+        'int8': (2, 1), 'int16': (2, 2), 'int32': (2, 3), 'int64': (2, 4),
+        'float16': (3, 1.5), 'float32': (3, 2.5), 'float64': (3, 3.5),
+        'complex64': (4, 3), 'complex128': (4, 4)
+    }
+
+    cat1 = category[type1]
+    cat2 = category[type2]
+
+    if(cat2[0] >= cat1[0] and cat2[1] > cat1[1]):
+        return True
+    else:
+        return False
 
 
 @register_canonicalize
@@ -2418,6 +2462,10 @@ compile.optdb['specialize'].register('local_remove_all_assert',
                                      local_remove_all_assert,
                                      'unsafe',
                                      use_db_name_as_tag=False)
+compile.optdb['useless'].register('local_remove_all_assert',
+                                  local_remove_all_assert,
+                                  'unsafe',
+                                  use_db_name_as_tag=False)
 
 #######################
 # Constant Canonicalization
@@ -3247,12 +3295,15 @@ def local_IncSubtensor_serialize(node):
         if movable_inputs:
             new_inputs = ([i for i in node.inputs if not movable(i)] +
                           [mi.owner.inputs[0] for mi in movable_inputs])
-            new_add = T.add(*new_inputs)
+            if len(new_inputs) == 0:
+                new_add = new_inputs[0]
+            else:
+                new_add = T.add(*new_inputs)
 
-            # Copy over stacktrace from original output, as an error
-            # (e.g. an index error) in this add operation should
-            # correspond to an error in the original add operation.
-            copy_stack_trace(node.outputs[0], new_add)
+                # Copy over stacktrace from original output, as an error
+                # (e.g. an index error) in this add operation should
+                # correspond to an error in the original add operation.
+                copy_stack_trace(node.outputs[0], new_add)
 
             # stack up the new incsubtensors
             tip = new_add

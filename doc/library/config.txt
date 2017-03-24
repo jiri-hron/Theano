@@ -253,13 +253,12 @@ import theano and print the config variable, as in:
 
     Bool value: either ``True`` or ``False``
 
-    Default: ``True`` if the environment variable OMP_NUM_THREADS!=1 or
-             if we detect more than 1 CPU core. Otherwise ``False``.
+    Default: ``False``
 
-    Enable or not parallel computation on the CPU with OpenMP.
-    It is the default value used when creating an Op that support it.
-    The best is to define it via Theano configuration
-    file or with the environment variable THEANO_FLAGS.
+    Enable or disable parallel computation on the CPU with OpenMP.
+    It is the default value used when creating an Op that supports it.
+    It is best to define it in .theanorc
+    or in the environment variable THEANO_FLAGS.
 
 .. attribute:: openmp_elemwise_minsize
 
@@ -692,6 +691,14 @@ import theano and print the config variable, as in:
     If ``'True'``, require the use of cuDNN.  If cuDNN is unavailable, raise an error.
 
     If ``'False'``, do not use cuDNN or check if it is available.
+
+    If ``'no_check'``, assume present and the version between header and library match (so less compilation at context init)",
+
+.. attribute:: config.conv.assert_shape
+
+    If True, AbstractConv* ops will verify that user-provided
+    shapes match the runtime shapes (debugging option,
+    may slow down compilation)
 
 .. attribute:: config.dnn.conv.workmem
 

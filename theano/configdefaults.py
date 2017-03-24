@@ -127,6 +127,14 @@ AddConfigVar(
     in_c_key=False)
 
 AddConfigVar(
+    'conv.assert_shape',
+    "If True, AbstractConv* ops will verify that user-provided"
+    " shapes match the runtime shapes (debugging option,"
+    " may slow down compilation)",
+    BoolParam(False),
+    in_c_key=False)
+
+AddConfigVar(
     'print_global_stats',
     "Print some global statistics (time spent) at the end",
     BoolParam(False),
@@ -237,6 +245,16 @@ AddConfigVar('nvcc.fastmath',
              # Not needed in c key as it is already added.
              # We remove it as we don't make the md5 of config to change
              # if theano.sandbox.cuda is loaded or not.
+             in_c_key=False)
+
+AddConfigVar('nvcc.cudafe',
+             "If 'always' (the default), cudafe will be called for every GPU"
+             " Op compilation. If 'heuristic', it will only be called if the"
+             " source code appears to contain CUDA code. This can speed up"
+             " compilation and importing theano, but might fail to compile"
+             " some custom GPU Ops.",
+             EnumStr('always', 'heuristic'),
+             # Not needed in c key, does not affect the compilation result.
              in_c_key=False)
 
 AddConfigVar('gpuarray.sync',
@@ -396,8 +414,9 @@ AddConfigVar('dnn.enabled',
              "'auto', use cuDNN if available, but silently fall back"
              " to not using it if not present."
              " If True and cuDNN can not be used, raise an error."
-             " If False, disable cudnn",
-             EnumStr("auto", "True", "False"),
+             " If False, disable cudnn even if present."
+             " If no_check, assume present and the version between header and library match (so less compilation at context init)",
+             EnumStr("auto", "True", "False", "no_check"),
              in_c_key=False)
 
 # This flag determines whether or not to raise error/warning message if

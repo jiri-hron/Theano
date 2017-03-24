@@ -18,6 +18,7 @@ import sys
 import time
 from collections import defaultdict
 from six import iteritems
+import warnings
 
 import numpy as np
 
@@ -102,7 +103,6 @@ def _atexit_print_fn():
                         assert len(merge) == len(cum.optimizer_profile[1])
                         cum.optimizer_profile = (cum.optimizer_profile[0], merge)
                     except Exception as e:
-                        print("Got an exception while merging profile")
                         print(e)
                         cum.optimizer_profile = None
                 else:
@@ -147,6 +147,14 @@ def print_global_stats():
     print('=' * 50, file=destination_file)
 
 
+_profiler_printers = []
+
+
+def register_profiler_printer(fct):
+    _profiler_printers.append(fct)
+    return fct
+
+
 class ProfileStats(object):
 
     """
@@ -172,7 +180,7 @@ class ProfileStats(object):
         self.apply_time = {}
         self.apply_callcount = {}
         # self.apply_cimpl = None
-        # self.messge = None
+        # self.message = None
     #
     # Note on implementation:
     # Class variables are used here so that each one can be
@@ -251,29 +259,35 @@ class ProfileStats(object):
 
     # param is called flag_time_thunks because most other attributes with time
     # in the name are times *of* something, rather than configuration flags.
-    def __init__(self, atexit_print=True, flag_time_thunks=None, **kwargs):
-        if (config.profile and
+    def __init__(self, atexit_print=True, flag_time_thunks=None,
+                 gpu_checks=True, **kwargs):
+        if (gpu_checks and
                 ((hasattr(theano, 'sandbox') and
                   hasattr(theano.sandbox, 'cuda') and
                   theano.sandbox.cuda.cuda_enabled) or (
                       hasattr(theano, 'gpuarray') and
-                      theano.gpuarray.pygpu_activated))):
-            if os.environ.get('CUDA_LAUNCH_BLOCKING', '0') != '1':
-                raise Exception(
-                    "You are running the Theano profiler with CUDA enabled."
-                    " Theano GPU ops execution is asynchronous by default."
-                    " So by default, the profile is useless."
-                    " You must set the environment variable"
-                    " CUDA_LAUNCH_BLOCKING to 1 to tell the CUDA driver to"
-                    " synchronize the execution to get a meaningful profile.")
-        if (config.profile and
+                      theano.gpuarray.pygpu_activated)) and
+                os.environ.get('CUDA_LAUNCH_BLOCKING', '0') != '1'):
+            msg = (
+                "You are running the Theano profiler with CUDA enabled."
+                " Theano GPU ops execution is asynchronous by default."
+                " So by default, the profile is useless."
+                " You must set the environment variable"
+                " CUDA_LAUNCH_BLOCKING to 1 to tell the CUDA driver to"
+                " synchronize the execution to get a meaningful profile.")
+            if config.profile:
+                raise Exception(msg)
+            else:
+                warnings.warn(msg)
+
+        if (config.profile and gpu_checks and
                 hasattr(theano, 'gpuarray') and
                 theano.gpuarray.pygpu_activated and
                 not config.profiling.ignore_first_call):
-            logger.warn(
+            warnings.warn(
                 "Theano flag profiling.ignore_first_call is False."
                 " This cause bad profiling result in the new gpu"
-                " back-end, we as sometimes we compile at the first call.")
+                " back-end, as sometimes we compile at the first call.")
 
         self.apply_callcount = {}
         self.output_size = {}
@@ -1317,6 +1331,7 @@ class ProfileStats(object):
             print("-----------------", file=file)
             self.optimizer_profile[0].print_profile(file,
                                                     self.optimizer_profile[1])
+        self.print_extra(file)
         self.print_tips(file)
 
     def print_tips(self, file):
@@ -1462,6 +1477,12 @@ class ProfileStats(object):
 
         if not printed_tip:
             print("  Sorry, no tip for today.", file=file)
+
+    def print_extra(self, file):
+        params = [self.message, self.compile_time, self.fct_call_time,
+                  self.apply_time, self.apply_cimpl, self.output_size]
+        for f in _profiler_printers:
+            f(*params, file=file)
 
 
 class ScanProfileStats(ProfileStats):

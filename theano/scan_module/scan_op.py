@@ -207,10 +207,10 @@ class Scan(PureOp):
         if self.info['gpu'] or self.info['gpua']:
             self._hash_inner_graph = self.info['gpu_hash']
         else:
-            tmp_in, tmp_out = scan_utils.reconstruct_graph(self.inputs,
-                                                           self.outputs)
-            # This is actually required for the line just after.
-            gof.FunctionGraph(tmp_in, tmp_out, clone=False)
+            # Do the missing inputs check here to have the error early.
+            for var in theano.gof.graph.inputs(self.outputs, self.inputs):
+                if var not in self.inputs and not isinstance(var, theano.Constant):
+                    raise theano.gof.MissingInputError("ScanOp is missing an input.")
             self._cmodule_key = gof.CLinker().cmodule_key_variables(self.inputs,
                                                                     self.outputs,
                                                                     [])
@@ -1987,10 +1987,8 @@ class Scan(PureOp):
         if self.truncate_gradient != -1:
             grad_steps = tensor.minimum(grad_steps, self.truncate_gradient)
 
-        rval = scan_utils.reconstruct_graph(self.inputs,
-                                            self.outputs)
-        self_inputs = rval[0]
-        self_outputs = rval[1]
+        self_inputs = self.inputs
+        self_outputs = self.outputs
         # differentiable inputs
         diff_inputs = (self.inner_seqs(self_inputs) +
                        self.inner_mitmot(self_inputs) +
@@ -2649,13 +2647,13 @@ class Scan(PureOp):
         return gradients
 
     def R_op(self, inputs, eval_points):
-        # Step 0. Don't work on the orignal tensor variables
-        rval = scan_utils.reconstruct_graph(self.inputs,
-                                            self.outputs, '_rop')
-        self_inputs = rval[0]
-        rop_of_inputs = rval[0][:self.n_seqs + self.n_outs] + \
-            rval[0][self.n_seqs + self.n_outs + self.n_shared_outs:]
-        self_outputs = rval[1]
+        # Step 0. Prepare some shortcut variable
+        self_inputs = self.inputs
+        rop_of_inputs = (self_inputs[:self.n_seqs + self.n_outs] +
+                         self_inputs[self.n_seqs + self.n_outs +
+                                     self.n_shared_outs:])
+        self_outputs = self.outputs
+
         # Step 1. Compute the R_op of the inner function
         inner_eval_points = [scan_utils.safe_new(x, '_evalpoint')
                              for x in rop_of_inputs]
@@ -2867,42 +2865,41 @@ class Scan(PureOp):
 gof.ops_with_inner_function[Scan] = 'fn'
 
 
-# TODO: move that to the new back-end and new profiling.py print_tips
-# @theano.compile.profilemode.register_profiler_printer
-def profile_printer(fct_name, compile_time, fct_call_time, fct_call,
-                    apply_time, apply_cimpl, message, outputs_size,
-                    other_time):
+@theano.compile.profiling.register_profiler_printer
+def profile_printer(message, compile_time, fct_call_time,
+                    apply_time, apply_cimpl, outputs_size, file):
     # Scan overhead profile
-    if any([isinstance(node.op, Scan) and v > 0 for (_, node), v in
+    if any([isinstance(node.op, Scan) and v > 0 for node, v in
             apply_time.items()]):
-        print()
-        print('Scan overhead:')
+        print('', file=file)
+        print('Scan overhead:', file=file)
         print('<Scan op time(s)> <sub scan fct time(s)> <sub scan op '
               'time(s)> <sub scan fct time(% scan op time)> <sub scan '
-              'op time(% scan op time)> <node>')
+              'op time(% scan op time)> <node>', file=file)
+
         total_super_scan_time = 0
         total_scan_fct_time = 0
         total_scan_op_time = 0
-        for (_, node), v in iteritems(apply_time):
-            if isinstance(node.op, Scan):
+        for node, v in iteritems(apply_time):
+            if isinstance(node.op, Scan) and node.op.fn.profile:
                 if v > 0:
-                    scan_fct_time = node.op.mode_instance.fn_time
-                    scan_op_time = node.op.mode_instance.local_time
+                    scan_fct_time = node.op.fn.profile.call_time
+                    scan_op_time = sum(node.op.fn.profile.apply_time.values())
                     total_super_scan_time += v
                     total_scan_fct_time += scan_fct_time
                     total_scan_op_time += scan_op_time
-                    print('    %5.1fs  %5.1fs  %5.1fs  %5.1f%%  %5.1f%%' % (
+                    print('      %5.1fs  %5.1fs  %5.1fs  %5.1f%%  %5.1f%%' % (
                         v,
                         scan_fct_time,
                         scan_op_time,
                         scan_fct_time / v * 100,
-                        scan_op_time / v * 100), node)
+                        scan_op_time / v * 100), node, file=file)
                 else:
                     print((' The node took 0s, so we can not '
-                           'compute the overhead'), node)
-        print('    total %5.1fs  %5.1fs  %5.1fs  %5.1f%%  %5.1f%%' % (
+                           'compute the overhead'), node, file=file)
+        print('total %5.1fs  %5.1fs  %5.1fs  %5.1f%%  %5.1f%%' % (
             total_super_scan_time,
             total_scan_fct_time,
             total_scan_op_time,
             total_scan_fct_time / total_super_scan_time * 100,
-            total_scan_op_time / total_super_scan_time * 100))
+            total_scan_op_time / total_super_scan_time * 100), file=file)

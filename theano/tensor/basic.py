@@ -19,7 +19,7 @@ from theano.gof.type import Generic
 
 from theano.tensor import elemwise
 from theano.tensor.var import (AsTensorError, TensorVariable,
-                               TensorConstant,
+                               TensorConstant, TensorConstantSignature,
                                _tensor_py_operators)
 from theano.tensor.type import TensorType, values_eq_approx_always_true
 from theano.tensor.type_other import NoneConst
@@ -220,7 +220,7 @@ _as_tensor_variable = as_tensor_variable
 as_tensor = as_tensor_variable
 
 
-def constant_or_value(x, rtype, name=None, ndim=None, dtype=None):
+def constant(x, name=None, ndim=None, dtype=None):
     """Return a symbolic `Constant` with value `x`.
 
     Raises
@@ -229,6 +229,16 @@ def constant_or_value(x, rtype, name=None, ndim=None, dtype=None):
         `x` could not be converted to a numpy.ndarray.
     ValueError
         `x` could not be expanded to have ndim dimensions.
+
+    Note
+    ----
+    We create a small cache of frequently used constant.
+    This speed up the Merge optimization for big graph.
+    We want to cache all scalar to don't merge as frequently constants.
+    But we don't want to cache too much stuff.
+    So we cache integer with dtype [u]int and float where the value is
+    between -10 and 10.
+    We cache all broadcast pattern for scalar.
 
     """
     x_ = scal.convert(x, dtype=dtype)
@@ -245,45 +255,29 @@ def constant_or_value(x, rtype, name=None, ndim=None, dtype=None):
         assert len(bcastable) == ndim
 
     try:
-        if rtype is TensorConstant:
-            rval = rtype(
-                TensorType(dtype=x_.dtype, broadcastable=bcastable),
-                x_.copy(),
-                name=name)
-            return rval
-        else:
-            # leave the shape out of the type
-            return rtype(TensorType(dtype=x_.dtype, broadcastable=bcastable),
-                         x_, name=name)
+        ttype = TensorType(dtype=x_.dtype, broadcastable=bcastable)
+        if not constant.enable:
+            return TensorConstant(ttype, x_, name=name)
+
+        sig = TensorConstantSignature((ttype, x_))
+        if sig in constant_cache:
+            return constant_cache[sig]
+
+        ret = TensorConstant(ttype, x_, name=name)
+        if (x_.size == 1 and
+            (-10) <= x_ <= 10 and
+            (x_.dtype in int_dtypes or x_.dtype in uint_dtypes or
+             (x_.dtype in float_dtypes and
+              # Limit the size of the cache.
+              len(constant_cache) < 10000))):
+            constant_cache[sig] = ret
+            # This is needed to raise a good error to the user.
+            ret.cached = True
+        return ret
     except Exception:
         raise TypeError("Could not convert %s to TensorType" % x, type(x))
 
 
-def constant(x, name=None, ndim=None, dtype=None):
-    ret = constant_or_value(x, rtype=TensorConstant, name=name, ndim=ndim,
-                            dtype=dtype)
-
-    # We create a small cache of frequently used constant.
-    # This speed up the Merge optimization for big graph.
-    # We want to cache all scalar to don't merge as frequently constants.
-    # But we don't want to cache too much stuff
-    # So we cache integer with dtype [u]int and float where the value is
-    # between -10 and 10
-    # We want to cache all broadcast pattern for scalar.
-    if not constant.enable:
-        return ret
-    sig = ret.signature()
-    if (sig not in constant_cache and ret.data.size == 1 and
-        (-10) <= ret.data <= 10 and
-        (ret.dtype in int_dtypes or ret.dtype in uint_dtypes or
-         (ret.dtype in float_dtypes and
-          # Limit the size of the cache.
-          len(constant_cache) < 10000))):
-        constant_cache[sig] = ret
-        # This is needed to raise a good error to the user.
-        ret.cached = True
-
-    return constant_cache.get(sig, ret)
 constant.enable = True
 constant_cache = {}
 
@@ -2310,13 +2304,33 @@ def chi2sf(x, k):
 
 
 @_scal_elemwise
-def j0(a):
-    """Bessel function of the 0'th kind"""
+def j0(x):
+    """Bessel function of the first kind of order 0."""
 
 
 @_scal_elemwise
-def j1(a):
-    """Bessel function of the 1'th kind"""
+def j1(x):
+    """Bessel function of the first kind of order 1."""
+
+
+@_scal_elemwise
+def jv(v, x):
+    """Bessel function of the first kind of order v (real)."""
+
+
+@_scal_elemwise
+def i0(x):
+    """Modified Bessel function of the first kind of order 0."""
+
+
+@_scal_elemwise
+def i1(x):
+    """Modified Bessel function of the first kind of order 1."""
+
+
+@_scal_elemwise
+def iv(v, x):
+    """Modified Bessel function of the first kind of order v (real)."""
 
 
 @_scal_elemwise
@@ -3791,7 +3805,7 @@ class Split(Op):
         return self.make_node(eval_points[0], *inputs[1:]).outputs
 
     def c_code_cache_version(self):
-        return (1,)
+        return (2,)
 
     def c_support_code(self):
         return """
@@ -3907,7 +3921,7 @@ class Split(Op):
                                     ndim, split_dims,
                                     %(x_typenum)s,
                                     PyArray_STRIDES(%(x)s),
-                                    PyArray_DATA(%(x)s) + data_offset,
+                                    PyArray_BYTES(%(x)s) + data_offset,
                                     %(x_itemsize)s,
                                     PyArray_FLAGS(%(x)s),
                                     NULL);
@@ -4198,7 +4212,7 @@ class Join(Op):
                                      dtype=node.outputs[0].type.dtype)
 
     def c_code_cache_version(self):
-        return (4,)
+        return (5,)
 
     def c_code(self, node, name, inputs, outputs, sub):
         axis, tensors = inputs[0], inputs[1:]
@@ -4219,7 +4233,6 @@ class Join(Op):
 
         copy_inputs_to_list = '\n'.join(copy_to_list)
         n = len(tensors)
-        khar = "printf(\"tensors_lens_sum: %d\", tensors_lens_sum);"
 
         code = """
         int axis = ((%(adtype)s *)PyArray_DATA(%(axis)s))[0];
@@ -4232,7 +4245,6 @@ class Join(Op):
             for(int i=0; i < %(n)s; i++){
                 tensors_lens_sum += PyArray_DIM((PyArrayObject *)(PyList_GetItem(list, i)), axis);
             }
-            %(khar)s
             tensors_lens_sum -= PyArray_DIM(%(non_empty_tensor)s, axis);
         }
         if(%(view)s != -1 && tensors_lens_sum == 0) {
@@ -6297,7 +6309,18 @@ class ExtractDiag(Op):
     def grad(self, inputs, gout):
         (x,) = inputs
         (gz,) = gout
-        return [grad_not_implemented(self, 0, x)]
+
+        if x.ndim == 2:
+            # The following code is moved from tensor.nlinalg.ExtractDiag, only
+            # works for matrices.
+            x = theano.tensor.zeros_like(x)
+            xdiag = theano.tensor.AllocDiag(offset=self.offset)(gz)
+            return [theano.tensor.set_subtensor(
+                x[:xdiag.shape[0], :xdiag.shape[1]], xdiag)]
+        else:
+            warnings.warn("gradient of theano.tensor.nlinalg.ExtractDiag only"
+                          "works for matrices.")
+            return [grad_not_implemented(self, 0, x)]
 
     def infer_shape(self, node, shapes):
         in_shape, = shapes
@@ -6318,42 +6341,108 @@ class ExtractDiag(Op):
 
 
 def diagonal(a, offset=0, axis1=0, axis2=1):
-    if (offset, axis1, axis2) == (0, 0, 1):
-        return theano.tensor.nlinalg.extract_diag(a)
+    """
+    A helper function for `theano.tensor.ExtractDiag`. It accepts tensor with
+    `ndim >= 2` as input. The name `diagonal` is just meant to keep it
+    consistent with numpy.
+
+    Parameters
+    ----------
+    a : symbolic tensor
+    offset : int
+        offset
+    axis1 : int
+    axis2 : int
+
+    Returns
+    -------
+    tensor : symbolic tensor
+
+    """
     return ExtractDiag(offset, axis1, axis2)(a)
 
 
-class Diag(Op):
+class AllocDiag(Op):
+    """
+    An op that copies a vector to the diagonal of an empty matrix. It does the
+    inverse of ExtractDiag.
 
-    __props__ = ()
+    Usage: T.AllocDiag()(x)
+
+    `x` should be a tensor vector. The parenthesis in the front should indicate
+    which main diagonal the vector value goes into. By default it is set to
+    `0`, which corresponds to setting the values of x to the main diagonal in
+    the returned matrix.
+
+    Parameters
+    ----------
+    offset : int
+        Indicates which diagonal to put `x` into. Defaults to `0`.
+
+    x: symbolic vector
+        A tensor vector consists of diagonal values.
+
+    Returns
+    -------
+    tensor : symbolic tenstor
+        A tensor with passed vector values at its corresponding diagonal.
+
+    """
+
+    __props__ = ("offset", )
+    default_offset = 0
+
+    def __init__(self, offset=0):
+        if numpy_diagonal_return_view:
+            self.view_map = {0: [0]}
+        self.offset = offset
 
     def make_node(self, diag):
         diag = as_tensor_variable(diag)
         if diag.type.ndim != 1:
             raise TypeError('data argument must be a vector', diag.type)
-
         return Apply(self, [diag], [matrix(dtype=diag.dtype)])
 
     def perform(self, node, inputs, outputs):
         (z,) = outputs
-        z[0] = numpy.diag(inputs[0])
+        z[0] = numpy.diag(inputs[0], self.offset)
 
     def grad(self, inputs, gout):
         (gz,) = gout
-        return [diagonal(gz)]
+        return [diagonal(gz, offset=self.offset, axis1=0, axis2=1)]
 
     def infer_shape(self, nodes, shapes):
         return [(shapes[0][0],) * 2]
 
 
 def diag(v, k=0):
+    """
+    A helper function for two ops: `theano.tensor.ExtractDiag` and
+    `theano.tensor.AllocDiag`. The name `diag` is meant to keep it consistent
+    with numpy. It both accepts tensor vector and tensor matrix.
+    While the passed tensor variable `v` has `v.ndim>=2`, it builds a
+    `ExtractDiag` instance, and returns a vector with its entries equal to
+    `v`'s main diagonal; otherwise if `v.ndim` is `1`, it builds an `AllocDiag`
+    instance, and returns a matrix with `v` at its k-th diaogonal.
+
+    Parameters
+    ----------
+    v : symbolic tensor
+    k : int
+        offset
+
+    Returns
+    -------
+    tensor : symbolic tensor
+
+    """
+
     if v.ndim == 1:
-        assert k == 0, "diagonals other than main are not implemented"
-        return Diag()(v)
-    elif v.ndim == 2:
-        return diagonal(v, k)
+        return AllocDiag(k)(v)
+    elif v.ndim >= 2:
+        return diagonal(v, offset=k)
     else:
-        raise ValueError("Input must be 1- or 2-d.")
+        raise ValueError("Input must has v.ndim >= 1.")
 
 
 def stacklists(arg):

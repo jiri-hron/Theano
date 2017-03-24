@@ -212,7 +212,7 @@ class TestToposort:
         o0 = MyOp.make_node(r1, r2)
         o1 = MyOp.make_node(r3, r4)
         all = io_toposort([r1, r2, r3, r4], o0.outputs + o1.outputs)
-        assert all == [o1, o0]
+        assert all == [o1, o0] or all == [o0, o1]
 
     def test_4(self):
         """Test inputs and outputs mixed together in a chain graph"""
@@ -359,9 +359,7 @@ class TestAutoName:
         assert r1 is r2
 
         r3 = tensor.constant(1.6)
-        # The cache still create a new object that we don't return.
-        # This is why we must increase by 2 and not 1.
-        assert r3.auto_name == "auto_" + str(autoname_id + 2)
+        assert r3.auto_name == "auto_" + str(autoname_id + 1)
 
     def test_tensorvariable(self):
         # Get counter value
